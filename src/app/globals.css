@@ -1,0 +1,164 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+
+  --background: #f6f7f9;
+  --surface: #ffffff;
+  --surface-raised: #f1f3f6;
+  --border: #e2e5eb;
+  --border-soft: #ebedf1;
+  --foreground: #14181f;
+  --muted: #5b6472;
+  --muted-soft: #8891a0;
+
+  --accent: #2f7fe0;
+  --accent-hover: #2568bc;
+  --accent-soft: rgba(47, 128, 224, 0.1);
+  --accent-foreground: #ffffff;
+
+  --shadow-color: 220 20% 50%;
+  --shadow-sm: 0 1px 2px hsl(var(--shadow-color) / 0.06);
+  --shadow-md: 0 4px 14px hsl(var(--shadow-color) / 0.08);
+
+  --status-healthy: #17a06f;
+  --status-healthy-bg: rgba(23, 160, 111, 0.1);
+  --status-warning: #c67c00;
+  --status-warning-bg: rgba(198, 124, 0, 0.1);
+  --status-critical: #e0393e;
+  --status-critical-bg: rgba(224, 57, 62, 0.1);
+  --status-excess: #6d5be0;
+  --status-excess-bg: rgba(109, 91, 224, 0.1);
+  --status-transit: #0f88c9;
+  --status-transit-bg: rgba(15, 136, 201, 0.1);
+  --status-unknown: #5b6472;
+  --status-unknown-bg: rgba(91, 100, 114, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --background: #0a0d13;
+    --surface: #10141c;
+    --surface-raised: #161c27;
+    --border: #232b3a;
+    --border-soft: #1a212e;
+    --foreground: #e9edf4;
+    --muted: #94a0b3;
+    --muted-soft: #626d80;
+
+    --accent: #4da8ff;
+    --accent-hover: #6fbaff;
+    --accent-soft: rgba(77, 168, 255, 0.14);
+    --accent-foreground: #05121f;
+
+    --shadow-color: 220 40% 2%;
+    --shadow-sm: 0 1px 2px hsl(var(--shadow-color) / 0.4);
+    --shadow-md: 0 4px 16px hsl(var(--shadow-color) / 0.45);
+
+    --status-healthy: #34d399;
+    --status-healthy-bg: rgba(52, 211, 153, 0.14);
+    --status-warning: #f5a623;
+    --status-warning-bg: rgba(245, 166, 35, 0.14);
+    --status-critical: #f65a5a;
+    --status-critical-bg: rgba(246, 90, 90, 0.16);
+    --status-excess: #9d8dff;
+    --status-excess-bg: rgba(157, 141, 255, 0.16);
+    --status-transit: #38bdf8;
+    --status-transit-bg: rgba(56, 189, 248, 0.14);
+    --status-unknown: #94a0b3;
+    --status-unknown-bg: rgba(148, 160, 179, 0.14);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --background: #0a0d13;
+  --surface: #10141c;
+  --surface-raised: #161c27;
+  --border: #232b3a;
+  --border-soft: #1a212e;
+  --foreground: #e9edf4;
+  --muted: #94a0b3;
+  --muted-soft: #626d80;
+
+  --accent: #4da8ff;
+  --accent-hover: #6fbaff;
+  --accent-soft: rgba(77, 168, 255, 0.14);
+  --accent-foreground: #05121f;
+
+  --shadow-color: 220 40% 2%;
+  --shadow-sm: 0 1px 2px hsl(var(--shadow-color) / 0.4);
+  --shadow-md: 0 4px 16px hsl(var(--shadow-color) / 0.45);
+
+  --status-healthy: #34d399;
+  --status-healthy-bg: rgba(52, 211, 153, 0.14);
+  --status-warning: #f5a623;
+  --status-warning-bg: rgba(245, 166, 35, 0.14);
+  --status-critical: #f65a5a;
+  --status-critical-bg: rgba(246, 90, 90, 0.16);
+  --status-excess: #9d8dff;
+  --status-excess-bg: rgba(157, 141, 255, 0.16);
+  --status-transit: #38bdf8;
+  --status-transit-bg: rgba(56, 189, 248, 0.14);
+  --status-unknown: #94a0b3;
+  --status-unknown-bg: rgba(148, 160, 179, 0.14);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-border: var(--border);
+  --color-border-soft: var(--border-soft);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-soft: var(--muted-soft);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-foreground: var(--accent-foreground);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+* {
+  border-color: var(--border);
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.shadow-panel {
+  box-shadow: var(--shadow-sm);
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
