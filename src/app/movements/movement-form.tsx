@@ -9,10 +9,8 @@ type Material = { id: string; name: string; uom: string };
 type Location = { id: string; name: string };
 
 export const LEDGER_MOVEMENT_TYPES: { type: TransactionType; label: string; help: string }[] = [
-  { type: "RECEIPT", label: "Receive Stock", help: "Material arriving from a supplier." },
-  { type: "CONSUMPTION", label: "Record Consumption", help: "Material consumed by a production process." },
-  { type: "TRANSFER", label: "Transfer Stock", help: "Move stock between two plant locations." },
-  { type: "DISPATCH", label: "Dispatch", help: "Finished goods leaving to a customer." },
+  { type: "CONSUMPTION", label: "Consume Stock", help: "Material consumed by production/operations." },
+  { type: "TRANSFER", label: "Transfer Stock", help: "Move stock between two plant locations. Total plant inventory does not change." },
 ];
 
 export function MovementForm({ type, materials, locations }: { type: TransactionType; materials: Material[]; locations: Location[] }) {
@@ -78,7 +76,7 @@ export function MovementForm({ type, materials, locations }: { type: Transaction
             </>
           ) : (
             <label className="text-xs text-muted">
-              {type === "RECEIPT" ? "To Location" : type === "DISPATCH" ? "From Location" : "From Location"}
+              Location
               <select name="locationId" required className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
                 {locations.map((l) => (
                   <option key={l.id} value={l.id}>{l.name}</option>
@@ -89,13 +87,13 @@ export function MovementForm({ type, materials, locations }: { type: Transaction
 
           {type === "CONSUMPTION" && (
             <label className="text-xs text-muted">
-              Production unit / process
-              <input name="processName" placeholder="e.g. Kiln, Cement Mill" className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
+              Consumption Area / Process
+              <input name="processName" placeholder="e.g. Cement Mill 1, Kiln" className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
             </label>
           )}
 
           <label className="text-xs text-muted sm:col-span-2">
-            {type === "RECEIPT" ? "Supplier / reference" : type === "DISPATCH" ? "Customer / reference" : "Reference"}
+            Reference / Reason
             <input name="reference" className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
           </label>
         </div>

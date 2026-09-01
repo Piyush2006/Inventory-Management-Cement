@@ -11,9 +11,12 @@ export function NewRequestForm({ materials, locations }: { materials: Material[]
   const searchParams = useSearchParams();
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState<{ ok: boolean; error?: string } | null>(null);
+  const [fromLocationId, setFromLocationId] = useState(locations[0]?.id ?? "");
+  const [toLocationId, setToLocationId] = useState(locations[1]?.id ?? locations[0]?.id ?? "");
   const defaultDate = new Date();
   defaultDate.setDate(defaultDate.getDate() + 7);
   const defaultDateStr = defaultDate.toISOString().slice(0, 10);
+  const sameLocation = fromLocationId !== "" && fromLocationId === toLocationId;
 
   return (
     <form
@@ -54,7 +57,12 @@ export function NewRequestForm({ materials, locations }: { materials: Material[]
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="text-xs text-muted">
           From location
-          <select name="fromLocationId" className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
+          <select
+            name="fromLocationId"
+            value={fromLocationId}
+            onChange={(e) => setFromLocationId(e.target.value)}
+            className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent"
+          >
             {locations.map((l) => (
               <option key={l.id} value={l.id}>{l.name}</option>
             ))}
@@ -62,12 +70,18 @@ export function NewRequestForm({ materials, locations }: { materials: Material[]
         </label>
         <label className="text-xs text-muted">
           To location
-          <select name="toLocationId" className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
+          <select
+            name="toLocationId"
+            value={toLocationId}
+            onChange={(e) => setToLocationId(e.target.value)}
+            className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent"
+          >
             {locations.map((l) => (
               <option key={l.id} value={l.id}>{l.name}</option>
             ))}
           </select>
         </label>
+        {sameLocation && <p className="sm:col-span-2 text-xs text-[var(--status-critical)]">From and To locations must be different.</p>}
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="text-xs text-muted">
@@ -81,7 +95,7 @@ export function NewRequestForm({ materials, locations }: { materials: Material[]
       </div>
       {result && !result.ok && <div className="text-sm text-[var(--status-critical)]">{result.error}</div>}
       {result && result.ok && <div className="text-sm text-[var(--status-healthy)]">Request raised.</div>}
-      <button type="submit" disabled={pending} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-40">
+      <button type="submit" disabled={pending || sameLocation} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-40">
         {pending ? "Raising…" : "New Stock Request"}
       </button>
     </form>

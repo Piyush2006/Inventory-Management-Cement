@@ -5,19 +5,27 @@ import { usePathname } from "next/navigation";
 
 const NAV_ITEMS = [
   { href: "/", label: "Dashboard" },
+  { href: "/locations", label: "Locations" },
+  { href: "/materials", label: "Materials" },
   { href: "/inventory", label: "Inventory" },
-  { href: "/movements", label: "Record Movement" },
-  { href: "/ledger", label: "Ledger" },
-  { href: "/production", label: "Production" },
-  { href: "/requests", label: "Stock Requests" },
-  { href: "/master-data", label: "Materials & Locations" },
+  { href: "/requests", label: "Requests" },
+  { href: "/movements", label: "Stock Operations" },
 ];
 
-export function Sidebar() {
+export function Sidebar({ role }: { role: string }) {
   const pathname = usePathname();
+  // A Requester's whole surface is Requests — raise, view own, confirm/not-received.
+  // No Dashboard, Inventory, Locations, Materials, or Stock Operations menu at all.
+  // Store Supervisor manages the request queue, not stock directly — no Stock Operations menu either.
+  const items =
+    role === "REQUESTER"
+      ? NAV_ITEMS.filter((i) => i.href === "/requests")
+      : role === "STORE_SUPERVISOR"
+        ? NAV_ITEMS.filter((i) => i.href !== "/movements")
+        : NAV_ITEMS;
   return (
     <nav className="flex h-full w-56 shrink-0 flex-col overflow-y-auto border-r border-border bg-surface px-3 py-4 scrollbar-thin">
-      <Link href="/" className="mb-5 flex items-center gap-2 px-2">
+      <Link href={role === "REQUESTER" ? "/requests" : "/"} className="mb-5 flex items-center gap-2 px-2">
         <span className="flex h-7 w-7 items-center justify-center rounded bg-accent-soft text-sm font-bold text-accent">B</span>
         <div className="leading-tight">
           <div className="text-sm font-semibold text-foreground">Berrima Cement Plant</div>
@@ -25,7 +33,7 @@ export function Sidebar() {
         </div>
       </Link>
       <ul className="space-y-0.5">
-        {NAV_ITEMS.map((item) => {
+        {items.map((item) => {
           const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
           return (
             <li key={item.href}>

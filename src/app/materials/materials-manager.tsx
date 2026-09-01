@@ -8,7 +8,7 @@ import { formatNumber } from "@/lib/format";
 type Material = {
   id: string; materialCode: string; name: string; category: string; uom: string;
   minStock: number | null; safetyStock: number | null; defaultLocationId: string | null;
-  productGrade: string | null; bagWeightKg: number | null; active: boolean;
+  active: boolean;
 };
 type Location = { id: string; name: string };
 

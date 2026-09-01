@@ -6,6 +6,9 @@ const nextConfig: NextConfig = {
     root: path.resolve(__dirname),
   },
   allowedDevOrigins: ["ims-cement.iocompute.ai"],
+  images: {
+    remotePatterns: [{ protocol: "https", hostname: "img.icons8.com" }],
+  },
 };
 
 export default nextConfig;

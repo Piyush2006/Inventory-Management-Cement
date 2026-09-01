@@ -3,8 +3,8 @@ import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { Panel, KpiTile } from "@/components/ui";
 import { formatNumber, formatDate, formatDateTime } from "@/lib/format";
-import { getCurrentUser } from "@/lib/auth";
-import { FULFILMENT_ROLES } from "@/lib/domain/enums";
+import { getCurrentUser, restrictToRequestsOnly, restrictStockOperationsFromSupervisor } from "@/lib/auth";
+import { STOCK_OPS_ROLES, type UserRole } from "@/lib/domain/enums";
 import { ReceiptActions } from "./receipt-actions";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +19,7 @@ export default async function ReceiptDetailPage({ params }: { params: Promise<{ 
   const { id } = await params;
   const receipt = await prisma.materialReceipt.findUnique({
     where: { id },
-    include: { supplier: true, material: true, destinationLocation: true, purchaseReference: true, stockRequest: true },
+    include: { supplier: true, material: true, destinationLocation: true, purchaseReference: true },
   });
   if (!receipt) notFound();
 
@@ -28,7 +28,9 @@ export default async function ReceiptDetailPage({ params }: { params: Promise<{ 
     receipt.reversalTransactionId ? prisma.inventoryTransaction.findUnique({ where: { id: receipt.reversalTransactionId } }) : null,
     getCurrentUser(),
   ]);
-  const canRecord = FULFILMENT_ROLES.includes(currentUser.role as "STORE_OPERATOR" | "INVENTORY_MANAGER");
+  restrictToRequestsOnly(currentUser);
+  restrictStockOperationsFromSupervisor(currentUser);
+  const canRecord = STOCK_OPS_ROLES.includes(currentUser.role as UserRole);
 
   return (
     <div className="space-y-6">
@@ -54,7 +56,7 @@ export default async function ReceiptDetailPage({ params }: { params: Promise<{ 
           <ReceiptActions id={receipt.id} status={receipt.status} />
         ) : (
           <p className="text-sm text-muted-soft">
-            Your role ({currentUser.role}) cannot post or cancel receipts — this requires Store/Inventory Operator or Inventory Manager.
+            Your role ({currentUser.role}) cannot post or cancel receipts — this requires Store/Delivery Operator, Inventory Manager, or Admin.
           </p>
         )}
       </Panel>
@@ -65,7 +67,6 @@ export default async function ReceiptDetailPage({ params }: { params: Promise<{ 
           <Row label="Purchase Reference" value={receipt.purchaseReference ? <Link href="/receipts" className="text-accent hover:underline">{receipt.purchaseReference.poNumber}</Link> : "None — direct receipt"} />
           <Row label="Destination Location" value={receipt.destinationLocation.name} />
           <Row label="Batch / Lot" value={receipt.batchLot ?? "—"} />
-          <Row label="Stock Request" value={receipt.stockRequest ? receipt.stockRequest.requestNumber : "—"} />
         </dl>
       </Panel>
 

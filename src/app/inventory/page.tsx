@@ -3,8 +3,10 @@ import { prisma } from "@/lib/db";
 import { classifyStockStatus } from "@/lib/inventory/status";
 import { Panel, Th, Td, LinkPill, EmptyState } from "@/components/ui";
 import { StatusBadge } from "@/components/status-badge";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { formatNumber } from "@/lib/format";
-import { MATERIAL_CATEGORIES, STOCK_STATUSES } from "@/lib/domain/enums";
+import { MATERIAL_CATEGORIES, STOCK_STATUSES, IN_TRANSIT_LOCATION_TYPE } from "@/lib/domain/enums";
+import { getCurrentUser, restrictToRequestsOnly } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +15,7 @@ export default async function InventoryPage({
 }: {
   searchParams: Promise<{ q?: string; category?: string; locationId?: string; status?: string }>;
 }) {
+  restrictToRequestsOnly(await getCurrentUser());
   const params = await searchParams;
   const [materials, locations] = await Promise.all([
     prisma.material.findMany({
@@ -21,18 +24,38 @@ export default async function InventoryPage({
         ...(params.category ? { category: params.category } : {}),
         ...(params.q ? { name: { contains: params.q } } : {}),
       },
-      include: { balances: { include: { location: true } } },
+      // Excludes the virtual in-transit location — material mid-delivery isn't on hand
+      // anywhere, so it must not inflate this figure or diverge from getTotalOnHand()
+      // (balance.ts), which the Material Detail page uses for the same material.
+      include: { balances: { where: { location: { type: { not: IN_TRANSIT_LOCATION_TYPE } } }, include: { location: true } } },
       orderBy: { name: "asc" },
     }),
-    prisma.location.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
+    prisma.location.findMany({ where: { active: true, type: { not: IN_TRANSIT_LOCATION_TYPE } }, orderBy: { name: "asc" } }),
   ]);
+  // One batched query for every material's QC Hold/Blocked quantities, keyed by location —
+  // avoids an N+1 getUnrestrictedAvailable() call per row. Status classification below uses
+  // this so QC Hold/Blocked stock can't make a material look falsely HEALTHY/LOW.
+  const qualityBalances = await prisma.qualityBalance.findMany({ where: { materialId: { in: materials.map((m) => m.id) } } });
+  const nonUnrestrictedByMaterialLocation = new Map<string, number>();
+  for (const q of qualityBalances) {
+    const key = `${q.materialId}:${q.locationId}`;
+    nonUnrestrictedByMaterialLocation.set(key, (nonUnrestrictedByMaterialLocation.get(key) ?? 0) + q.quantity);
+  }
 
   let rows = materials.map((m) => {
     const relevantBalances = params.locationId ? m.balances.filter((b) => b.locationId === params.locationId) : m.balances;
     const currentStock = relevantBalances.reduce((s, b) => s + b.quantity, 0);
-    const { status } = classifyStockStatus({ currentStock, minStock: m.minStock, safetyStock: m.safetyStock });
-    const locationNames = [...new Set(m.balances.filter((b) => b.quantity > 1e-6).map((b) => b.location.name))];
-    return { material: m, currentStock, status, locationNames };
+    const nonUnrestricted = relevantBalances.reduce((s, b) => s + (nonUnrestrictedByMaterialLocation.get(`${m.id}:${b.locationId}`) ?? 0), 0);
+    const unrestrictedStock = Math.max(0, currentStock - nonUnrestricted);
+    const { status } = classifyStockStatus({ currentStock: unrestrictedStock, minStock: m.minStock, safetyStock: m.safetyStock });
+    // Partitioned by location — every location actually holding this material, with its own
+    // quantity, not just a flat total. Makes an increase at one specific location (e.g. after
+    // a request is received) directly visible here instead of only on the Material Detail page.
+    const locationBreakdown = m.balances
+      .filter((b) => Math.abs(b.quantity) > 1e-6)
+      .map((b) => ({ name: b.location.name, quantity: b.quantity }))
+      .sort((a, b) => b.quantity - a.quantity);
+    return { material: m, currentStock, status, locationBreakdown };
   });
   if (params.locationId) rows = rows.filter((r) => r.currentStock > 1e-6);
   if (params.status) rows = rows.filter((r) => r.status === params.status);
@@ -85,7 +108,26 @@ export default async function InventoryPage({
         </form>
       </Panel>
 
-      <Panel title={`Materials (${rows.length})`}>
+      <Panel
+        title={`Materials (${rows.length})`}
+        action={
+          <ExportCsvButton
+            filename="inventory.csv"
+            headers={["Material", "Code", "Category", "Stock", "UOM", "Min Stock", "Safety Stock", "Status", "Locations"]}
+            rows={rows.map((r) => [
+              r.material.name,
+              r.material.materialCode,
+              r.material.category,
+              formatNumber(r.currentStock),
+              r.material.uom,
+              r.material.minStock != null ? formatNumber(r.material.minStock) : "",
+              r.material.safetyStock != null ? formatNumber(r.material.safetyStock) : "",
+              r.status,
+              r.locationBreakdown.map((b) => `${b.name}: ${formatNumber(b.quantity)}`).join("; "),
+            ])}
+          />
+        }
+      >
         {rows.length === 0 ? (
           <EmptyState title="No materials match these filters" />
         ) : (
@@ -111,7 +153,20 @@ export default async function InventoryPage({
                       <div className="text-xs text-muted-soft">{r.material.materialCode}</div>
                     </Td>
                     <Td className="text-xs text-muted">{r.material.category.replace("_", " ")}</Td>
-                    <Td className="text-xs text-muted">{r.locationNames.join(", ") || "—"}</Td>
+                    <Td className="text-xs text-muted">
+                      {r.locationBreakdown.length === 0 ? (
+                        "—"
+                      ) : (
+                        <div className="flex flex-col gap-0.5">
+                          {r.locationBreakdown.map((b) => (
+                            <div key={b.name} className="whitespace-nowrap">
+                              <span className="text-foreground">{b.name}</span>
+                              <span className="text-muted-soft"> — {formatNumber(b.quantity)} {r.material.uom}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </Td>
                     <Td className="text-right tabular">{formatNumber(r.currentStock)} {r.material.uom}</Td>
                     <Td className="text-right tabular text-muted">{r.material.minStock != null ? formatNumber(r.material.minStock) : "—"}</Td>
                     <Td className="text-right tabular text-muted">{r.material.safetyStock != null ? formatNumber(r.material.safetyStock) : "—"}</Td>

@@ -4,6 +4,7 @@ import Script from "next/script";
 import "./globals.css";
 import { Sidebar } from "@/components/nav";
 import { Topbar } from "@/components/topbar";
+import { getCurrentUser } from "@/lib/auth";
 
 const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
 const jetbrainsMono = JetBrains_Mono({ variable: "--font-jetbrains", subsets: ["latin"] });
@@ -24,7 +25,8 @@ const THEME_INIT_SCRIPT = `
 })();
 `;
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  const currentUser = await getCurrentUser();
   return (
     <html lang="en" suppressHydrationWarning className={`${inter.variable} ${jetbrainsMono.variable} h-full antialiased`}>
       <body className="h-full">
@@ -32,7 +34,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           {THEME_INIT_SCRIPT}
         </Script>
         <div className="flex h-full">
-          <Sidebar />
+          <Sidebar role={currentUser.role} />
           <div className="flex min-w-0 flex-1 flex-col">
             <Topbar />
             <main className="flex-1 overflow-y-auto bg-background px-6 py-6">{children}</main>

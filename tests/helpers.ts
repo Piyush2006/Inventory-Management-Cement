@@ -18,7 +18,7 @@ export async function makeLocation(overrides: Partial<{ name: string; type: stri
 
 export async function makeMaterial(overrides: Partial<{
   materialCode: string; name: string; category: string; uom: string; minStock: number; safetyStock: number;
-  bagWeightKg: number; productGrade: string; defaultLocationId: string;
+  defaultLocationId: string; tolerancePct: number;
 }> = {}) {
   return prisma.material.create({
     data: {
@@ -28,9 +28,8 @@ export async function makeMaterial(overrides: Partial<{
       uom: overrides.uom ?? "MT",
       minStock: overrides.minStock,
       safetyStock: overrides.safetyStock,
-      bagWeightKg: overrides.bagWeightKg,
-      productGrade: overrides.productGrade,
       defaultLocationId: overrides.defaultLocationId,
+      tolerancePct: overrides.tolerancePct,
     },
   });
 }

@@ -2,25 +2,33 @@ import { Suspense } from "react";
 import { prisma } from "@/lib/db";
 import { Panel, Th, Td, EmptyState } from "@/components/ui";
 import { formatNumber, formatDateTime } from "@/lib/format";
-import { getCurrentUser } from "@/lib/auth";
-import { FULFILMENT_ROLES } from "@/lib/domain/enums";
+import { getCurrentUser, restrictToRequestsOnly, restrictStockOperationsFromSupervisor } from "@/lib/auth";
+import { STOCK_OPS_ROLES, ADJUSTMENT_ROLES, DEFAULT_TOLERANCE_PCT, IN_TRANSIT_LOCATION_TYPE, type UserRole } from "@/lib/domain/enums";
 import { MovementTabs } from "./movement-tabs";
+import { PendingCountsPanel } from "./pending-counts-panel";
 
 export const dynamic = "force-dynamic";
 
-export default async function MovementsPage() {
-  const [materials, locations, balances, recentMovements, currentUser] = await Promise.all([
+export default async function StockOperationsPage() {
+  // Every query here excludes the virtual in-transit location — it's not a real place to
+  // receive/consume/transfer/count against; it only exists to model a request's delivery.
+  const [materials, locations, balances, recentMovements, receipts, suppliers, currentUser] = await Promise.all([
     prisma.material.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
-    prisma.location.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
-    prisma.inventoryBalance.findMany({ where: { quantity: { gt: 1e-6 } }, include: { material: true, location: true } }),
+    prisma.location.findMany({ where: { active: true, type: { not: IN_TRANSIT_LOCATION_TYPE } }, orderBy: { name: "asc" } }),
+    prisma.inventoryBalance.findMany({ where: { quantity: { gt: 1e-6 }, location: { type: { not: IN_TRANSIT_LOCATION_TYPE } } }, include: { material: true, location: true } }),
     prisma.inventoryTransaction.findMany({
       include: { material: true, sourceLocation: true, destinationLocation: true },
       orderBy: { timestamp: "desc" },
       take: 15,
     }),
+    prisma.materialReceipt.findMany({ include: { supplier: true, material: true }, orderBy: { createdAt: "desc" }, take: 15 }),
+    prisma.supplier.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
     getCurrentUser(),
   ]);
-  const canRecord = FULFILMENT_ROLES.includes(currentUser.role as "STORE_OPERATOR" | "INVENTORY_MANAGER");
+  restrictToRequestsOnly(currentUser);
+  restrictStockOperationsFromSupervisor(currentUser);
+  const canRecord = STOCK_OPS_ROLES.includes(currentUser.role as UserRole);
+  const canApprove = ADJUSTMENT_ROLES.includes(currentUser.role as UserRole);
 
   const balanceRows = balances.map((b) => ({
     materialId: b.materialId,
@@ -29,26 +37,77 @@ export default async function MovementsPage() {
     locationId: b.locationId,
     locationName: b.location.name,
     quantity: b.quantity,
+    tolerancePct: b.material.tolerancePct ?? DEFAULT_TOLERANCE_PCT,
+  }));
+
+  // Only counts that actually have a variance and haven't been posted yet — a count that
+  // matched book stock exactly also has no adjustmentTransactionId (there was nothing to
+  // adjust), so that alone isn't "pending," it's just done.
+  const pendingCounts = canApprove
+    ? (
+        await prisma.physicalCount.findMany({
+          where: { adjustmentTransactionId: null },
+          include: { material: true, location: true },
+          orderBy: { countedAt: "desc" },
+        })
+      ).filter((c) => Math.abs(c.countedQuantity - c.bookQuantityAtCount) > 1e-6)
+    : [];
+
+  const receiptRows = receipts.map((r) => ({
+    id: r.id,
+    grnNumber: r.grnNumber,
+    receiptDate: r.receiptDate,
+    supplierName: r.supplier.name,
+    materialName: r.material.name,
+    receivedQuantity: r.receivedQuantity,
+    acceptedQuantity: r.acceptedQuantity,
+    rejectedQuantity: r.rejectedQuantity,
+    status: r.status,
   }));
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-lg font-semibold text-foreground">Record Movement</h1>
-        <p className="mt-1 text-sm text-muted">Pick what you&apos;re recording. Every action here creates a persisted ledger entry and updates inventory immediately.</p>
+        <h1 className="text-lg font-semibold text-foreground">Stock Operations</h1>
+        <p className="mt-1 text-sm text-muted">Receive Material, Consume Stock, Transfer Stock, and Adjustment. Every action here creates a persisted ledger entry and updates inventory immediately.</p>
       </div>
 
       <Panel>
         {canRecord ? (
           <Suspense>
-            <MovementTabs materials={materials.map((m) => ({ id: m.id, name: m.name, uom: m.uom }))} locations={locations.map((l) => ({ id: l.id, name: l.name }))} balances={balanceRows} />
+            <MovementTabs
+              materials={materials.map((m) => ({ id: m.id, name: m.name, uom: m.uom }))}
+              locations={locations.map((l) => ({ id: l.id, name: l.name }))}
+              balances={balanceRows}
+              receipts={receiptRows}
+              suppliers={suppliers.map((s) => ({ id: s.id, name: s.name }))}
+              canRecord={canRecord}
+            />
           </Suspense>
         ) : (
           <p className="text-sm text-muted-soft">
-            Your role ({currentUser.role}) cannot record stock movements — this requires Store/Inventory Operator or Inventory Manager.
+            Your role ({currentUser.role}) cannot record stock operations — this requires Store/Delivery Operator, Inventory Manager, or Admin.
           </p>
         )}
       </Panel>
+
+      {canApprove && pendingCounts.length > 0 && (
+        <Panel title={`Pending Physical Counts (${pendingCounts.length})`}>
+          <PendingCountsPanel
+            counts={pendingCounts.map((c) => ({
+              id: c.id,
+              materialName: c.material.name,
+              uom: c.material.uom,
+              locationName: c.location.name,
+              bookQuantity: c.bookQuantityAtCount,
+              countedQuantity: c.countedQuantity,
+              tolerancePct: c.material.tolerancePct ?? DEFAULT_TOLERANCE_PCT,
+              countedBy: c.countedBy,
+              note: c.note,
+            }))}
+          />
+        </Panel>
+      )}
 
       <Panel title="Recent Movements">
         {recentMovements.length === 0 ? (

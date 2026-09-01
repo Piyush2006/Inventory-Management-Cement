@@ -1,60 +1,51 @@
 import Link from "next/link";
 import { getDashboardData } from "@/lib/inventory/dashboard";
-import { KpiTile, Panel, Th, Td, EmptyState, LinkPill } from "@/components/ui";
+import { Panel, Th, Td, LinkPill } from "@/components/ui";
 import { StatusBadge } from "@/components/status-badge";
 import { TrendChart } from "@/components/charts/trend-chart";
+import { StatCard, NeedsAttentionPanel, RequestStatusPanel, StockWatchlistPanel } from "./dashboard-widgets";
 import { formatNumber, formatDateTime } from "@/lib/format";
+import { getCurrentUser, restrictToRequestsOnly } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
+  restrictToRequestsOnly(await getCurrentUser());
   const data = await getDashboardData();
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-lg font-semibold text-foreground">Dashboard</h1>
-        <p className="mt-1 text-sm text-muted">Berrima Cement Plant — simulated demo data.</p>
+        <p className="mt-1 text-sm text-muted">Overview of inventory, requests and exceptions.</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <KpiTile label="Total Inventory" value={`${formatNumber(data.kpi.totalInventoryMt)} MT`} />
-        <KpiTile label="Critical Materials" value={data.kpi.criticalCount} tone={data.kpi.criticalCount > 0 ? "critical" : "healthy"} />
-        <KpiTile label="Low Stock Materials" value={data.kpi.lowCount} tone={data.kpi.lowCount > 0 ? "warning" : "healthy"} />
-        <KpiTile label="Open Stock Requests" value={data.kpi.openRequestsCount} />
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+        <StatCard icon="critical" tone="critical" label="Critical Stock" value={data.kpi.criticalCount} unit="Items" href="/inventory?status=CRITICAL" />
+        <StatCard icon="low" tone="warning" label="Low Stock" value={data.kpi.lowCount} unit="Items" href="/inventory?status=LOW" />
+        <StatCard icon="transit" tone="transit" label="In Transit" value={data.kpi.totalInTransitMt} unit="MT" href="/requests" />
+        <StatCard icon="requests" tone="healthy" label="Open Requests" value={data.kpi.openRequestsCount} unit="Requests" href="/requests" />
+        <StatCard icon="exception" tone="exception" label="Exceptions" value={data.kpi.exceptionsCount} unit="Items" href="/requests" />
       </div>
 
-      <Panel title="Exceptions">
-        {data.critical.length === 0 && data.low.length === 0 && data.highFillSilos.length === 0 && data.urgentOpenRequests.length === 0 ? (
-          <EmptyState title="Nothing needs attention" body="All materials healthy, no silos near capacity, no urgent open requests." />
-        ) : (
+      <NeedsAttentionPanel items={data.needsAttention} />
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <RequestStatusPanel rows={data.requestsByStatus} />
+        <StockWatchlistPanel rows={data.stockWatchlist} />
+      </div>
+
+      {data.highFillSilos.length > 0 && (
+        <Panel title="Silos Approaching Capacity">
           <div className="space-y-2">
-            {data.critical.map((r) => (
-              <div key={r.material.id} className="flex items-center justify-between rounded-md border border-[var(--status-critical)]/25 bg-[var(--status-critical-bg)] px-3 py-2 text-sm">
-                <span className="text-foreground">{r.material.name} — {r.reason}</span>
-                <LinkPill href={`/inventory/${r.material.id}`}>View →</LinkPill>
-              </div>
-            ))}
-            {data.low.map((r) => (
-              <div key={r.material.id} className="flex items-center justify-between rounded-md border border-[var(--status-warning)]/25 bg-[var(--status-warning-bg)] px-3 py-2 text-sm">
-                <span className="text-foreground">{r.material.name} — {r.reason}</span>
-                <LinkPill href={`/inventory/${r.material.id}`}>View →</LinkPill>
-              </div>
-            ))}
             {data.highFillSilos.map((s) => (
               <div key={s.location.id} className="flex items-center justify-between rounded-md border border-[var(--status-warning)]/25 bg-[var(--status-warning-bg)] px-3 py-2 text-sm">
                 <span className="text-foreground">{s.location.name} is {s.fillPct.toFixed(0)}% full — approaching capacity</span>
               </div>
             ))}
-            {data.urgentOpenRequests.map((r) => (
-              <div key={r.id} className="flex items-center justify-between rounded-md border border-[var(--status-critical)]/25 bg-[var(--status-critical-bg)] px-3 py-2 text-sm">
-                <span className="text-foreground">Urgent request {r.requestNumber} — {r.material.name} ({formatNumber(r.quantityRequested - r.receivedQuantity)} remaining)</span>
-                <LinkPill href="/requests">View →</LinkPill>
-              </div>
-            ))}
           </div>
-        )}
-      </Panel>
+        </Panel>
+      )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Panel title="Inventory Trend (14 days)">

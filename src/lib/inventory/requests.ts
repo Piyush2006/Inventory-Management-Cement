@@ -1,8 +1,8 @@
 import { prisma } from "@/lib/db";
 import { postTransferOut, postTransferIn } from "@/lib/inventory/ledger";
-import { getStockLevels } from "@/lib/inventory/balance";
+import { reconcileQualityBalances } from "@/lib/inventory/quality";
 import { requireRole, PermissionError } from "@/lib/auth";
-import { FULFILMENT_ROLES } from "@/lib/domain/enums";
+import { ACCEPT_REJECT_ROLES, ROUTE_ROLES, ASSIGN_ROLES, OPERATOR_ROLES, ADMIN_ROLE } from "@/lib/domain/enums";
 import type { RequestEventAction } from "@/lib/domain/enums";
 
 export class RequestError extends Error {}
@@ -26,6 +26,11 @@ async function logEvent(input: {
   await prisma.requestEvent.create({ data: input });
 }
 
+async function getRequestOrThrow(id: string) {
+  return prisma.stockRequest.findUniqueOrThrow({ where: { id } });
+}
+
+/** Requester creates a request. Different people, not the requester, will accept/assign/deliver it. */
 export async function createStockRequest(input: {
   materialId: string;
   quantityRequested: number;
@@ -38,8 +43,16 @@ export async function createStockRequest(input: {
   requestedByUserId: string;
 }) {
   if (input.quantityRequested <= 0) throw new RequestError("Requested quantity must be greater than zero");
-  const requester = await prisma.user.findUniqueOrThrow({ where: { id: input.requestedByUserId } });
   if (input.fromLocationId === input.toLocationId) throw new RequestError("From and To locations must be different");
+
+  const [requester, material, fromLocation, toLocation] = await Promise.all([
+    prisma.user.findUniqueOrThrow({ where: { id: input.requestedByUserId } }),
+    prisma.material.findUniqueOrThrow({ where: { id: input.materialId } }),
+    prisma.location.findUniqueOrThrow({ where: { id: input.fromLocationId } }),
+    prisma.location.findUniqueOrThrow({ where: { id: input.toLocationId } }),
+  ]);
+  if (!material.active) throw new RequestError("Material is not active");
+  if (!fromLocation.active || !toLocation.active) throw new RequestError("From and To locations must be active");
 
   const request = await prisma.stockRequest.create({
     data: {
@@ -54,131 +67,169 @@ export async function createStockRequest(input: {
       toLocationId: input.toLocationId,
       requestedByUserId: requester.id,
       requestedByRole: requester.role,
-      status: "PENDING",
+      status: "NEW_REQUEST",
     },
   });
-  await logEvent({ stockRequestId: request.id, action: "REQUEST_RAISED", userId: requester.id, role: requester.role, quantity: input.quantityRequested, fromLocationId: input.fromLocationId, toLocationId: input.toLocationId, reason: input.reason });
+  await logEvent({ stockRequestId: request.id, action: "REQUEST_CREATED", userId: requester.id, role: requester.role, quantity: input.quantityRequested, fromLocationId: input.fromLocationId, toLocationId: input.toLocationId, reason: input.reason });
   return request;
 }
 
-async function getRequestOrThrow(id: string) {
-  return prisma.stockRequest.findUniqueOrThrow({ where: { id } });
-}
-
+/** Inventory Manager's first operational decision: accept a new request. */
 export async function acceptStockRequest(requestId: string, actingUserId: string) {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: actingUserId } });
-  requireRole(user, FULFILMENT_ROLES);
+  requireRole(user, ACCEPT_REJECT_ROLES);
   const request = await getRequestOrThrow(requestId);
-  if (request.status !== "PENDING") throw new RequestError(`Only a PENDING request can be accepted (this one is ${request.status})`);
+  if (request.status !== "NEW_REQUEST") throw new RequestError(`Only a NEW_REQUEST can be accepted (this one is ${request.status})`);
 
   const updated = await prisma.stockRequest.update({ where: { id: requestId }, data: { status: "ACCEPTED", acceptedByUserId: user.id, acceptedAt: new Date() } });
   await logEvent({ stockRequestId: requestId, action: "ACCEPTED", userId: user.id, role: user.role });
   return updated;
 }
 
+/** Inventory Manager rejects a new request. Rejected requests remain visible in history with their reason. */
 export async function rejectStockRequest(requestId: string, actingUserId: string, reason: string) {
   if (!reason?.trim()) throw new RequestError("A rejection reason is required");
   const user = await prisma.user.findUniqueOrThrow({ where: { id: actingUserId } });
-  requireRole(user, FULFILMENT_ROLES);
+  requireRole(user, ACCEPT_REJECT_ROLES);
   const request = await getRequestOrThrow(requestId);
-  if (request.status !== "PENDING") throw new RequestError(`Only a PENDING request can be rejected (this one is ${request.status})`);
+  if (request.status !== "NEW_REQUEST") throw new RequestError(`Only a NEW_REQUEST can be rejected (this one is ${request.status})`);
 
   const updated = await prisma.stockRequest.update({ where: { id: requestId }, data: { status: "REJECTED", rejectedByUserId: user.id, rejectedAt: new Date(), rejectionReason: reason } });
   await logEvent({ stockRequestId: requestId, action: "REJECTED", userId: user.id, role: user.role, reason });
   return updated;
 }
 
-/** Only the requester who raised it can cancel, and only while it's still PENDING. */
-export async function cancelStockRequest(requestId: string, actingUserId: string) {
-  const user = await prisma.user.findUniqueOrThrow({ where: { id: actingUserId } });
-  const request = await getRequestOrThrow(requestId);
-  if (request.requestedByUserId !== user.id) throw new PermissionError("Only the requester who raised this request can cancel it");
-  if (request.status !== "PENDING") throw new RequestError(`Only a PENDING request can be cancelled (this one is ${request.status})`);
+// Both routeToSupervisor and assignOperator are reachable from the same set of statuses:
+// ACCEPTED (first round), PARTIALLY_RECEIVED / NOT_RECEIVED (re-arrange for the next round,
+// same Request ID — never a new request), or ASSIGNED itself (re-route/re-assign before
+// delivery has started).
+const ROUTE_OR_ASSIGN_VALID_FROM = ["ACCEPTED", "PARTIALLY_RECEIVED", "NOT_RECEIVED", "ASSIGNED"];
 
-  const updated = await prisma.stockRequest.update({ where: { id: requestId }, data: { status: "CANCELLED" } });
-  await logEvent({ stockRequestId: requestId, action: "CANCELLED", userId: user.id, role: user.role });
+/**
+ * Inventory Manager's second step, before anyone picks an operator: hand the request to one
+ * specific Store Supervisor. Only that Supervisor (not just any Supervisor) can then call
+ * assignOperator below. Re-callable to redirect to a different Supervisor — it doesn't touch
+ * status, so it can't undo progress an operator has already made.
+ */
+export async function routeToSupervisor(requestId: string, supervisorUserId: string, actingUserId: string) {
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: actingUserId } });
+  requireRole(user, ROUTE_ROLES);
+  const request = await getRequestOrThrow(requestId);
+  if (!ROUTE_OR_ASSIGN_VALID_FROM.includes(request.status)) {
+    throw new RequestError(`Cannot route a request with status ${request.status}`);
+  }
+
+  const supervisor = await prisma.user.findUniqueOrThrow({ where: { id: supervisorUserId } });
+  requireRole(supervisor, ["STORE_SUPERVISOR"]);
+
+  const updated = await prisma.stockRequest.update({ where: { id: requestId }, data: { routedToUserId: supervisor.id, routedByUserId: user.id, routedAt: new Date() } });
+  await logEvent({ stockRequestId: requestId, action: "ROUTED", userId: user.id, role: user.role, reason: `Routed to ${supervisor.name}` });
   return updated;
 }
 
 /**
- * Reserves stock at the request's From Location without moving anything physically —
- * On Hand is unchanged, but Available (On Hand − Reserved) drops. Can run again from
- * PARTIALLY_RECEIVED to allocate the next round of a multi-batch fulfilment; never
- * allocates more than the still-unallocated remainder of the requested quantity.
+ * The routed-to Store Supervisor assigns a specific Store/Delivery Operator to carry out
+ * delivery. Requires the request to have already been routed to a Supervisor (routeToSupervisor
+ * above) — and, unless the actor is Admin, requires the acting Supervisor to be the one it was
+ * routed to, not just any Supervisor. Reserves whatever quantity still needs to physically move
+ * for this round — On Hand is unchanged, but Available (On Hand − Reserved) drops, so no other
+ * request can double-book it.
  */
-export async function allocateStock(requestId: string, quantity: number, actingUserId: string) {
+export async function assignOperator(requestId: string, operatorUserId: string, actingUserId: string) {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: actingUserId } });
-  requireRole(user, FULFILMENT_ROLES);
+  requireRole(user, ASSIGN_ROLES);
   const request = await getRequestOrThrow(requestId);
-  if (request.status !== "ACCEPTED" && request.status !== "PARTIALLY_RECEIVED") {
-    throw new RequestError(`Cannot allocate stock for a request with status ${request.status}`);
+  if (!ROUTE_OR_ASSIGN_VALID_FROM.includes(request.status)) {
+    throw new RequestError(`Cannot assign an operator for a request with status ${request.status}`);
   }
-  if (quantity <= 0) throw new RequestError("Allocation quantity must be greater than zero");
-  const remainingToAllocate = request.quantityRequested - request.allocatedQuantity;
-  if (quantity > remainingToAllocate + 1e-6) {
-    throw new RequestError(`Cannot allocate ${quantity} — only ${remainingToAllocate} of the requested quantity remains unallocated.`);
-  }
-
-  const levels = await getStockLevels(request.materialId, request.fromLocationId);
-  if (quantity > levels.available + 1e-6) {
-    throw new RequestError(`Insufficient available stock at the source location: ${levels.available.toLocaleString()} available (On Hand ${levels.onHand.toLocaleString()} − Reserved ${levels.reserved.toLocaleString()}).`);
+  if (user.role !== ADMIN_ROLE) {
+    if (!request.routedToUserId) {
+      throw new RequestError("This request must be routed to a Store Supervisor before an operator can be assigned");
+    }
+    if (request.routedToUserId !== user.id) {
+      throw new PermissionError("Only the Store Supervisor this request was routed to can assign an operator");
+    }
   }
 
-  await prisma.stockReservation.create({ data: { stockRequestId: requestId, materialId: request.materialId, locationId: request.fromLocationId, quantity, status: "ACTIVE" } });
-  const updated = await prisma.stockRequest.update({ where: { id: requestId }, data: { allocatedQuantity: request.allocatedQuantity + quantity, status: "ALLOCATED" } });
-  await logEvent({ stockRequestId: requestId, action: "ALLOCATED", userId: user.id, role: user.role, quantity, fromLocationId: request.fromLocationId });
+  const operator = await prisma.user.findUniqueOrThrow({ where: { id: operatorUserId } });
+  requireRole(operator, OPERATOR_ROLES);
+
+  // Validation disabled for now, per explicit request — assignment no longer checks available
+  // stock at the source location. A reservation is still recorded either way (still drives the
+  // Reserved/Available figures elsewhere), but it's no longer a gate on whether Assign succeeds.
+  const remainingToMove = request.quantityRequested - request.deliveredQuantity;
+  if (request.status !== "ASSIGNED" && remainingToMove > 1e-6) {
+    await prisma.stockReservation.create({ data: { stockRequestId: requestId, materialId: request.materialId, locationId: request.fromLocationId, quantity: remainingToMove, status: "ACTIVE" } });
+  }
+
+  const updated = await prisma.stockRequest.update({ where: { id: requestId }, data: { status: "ASSIGNED", assignedToUserId: operator.id, assignedByUserId: user.id, assignedAt: new Date() } });
+  await logEvent({ stockRequestId: requestId, action: "ASSIGNED", userId: user.id, role: user.role, quantity: remainingToMove > 1e-6 ? remainingToMove : undefined, fromLocationId: request.fromLocationId, toLocationId: request.toLocationId, reason: `Assigned to ${operator.name}` });
   return updated;
 }
 
 /**
- * Physically moves the currently-allocated (reserved) quantity out of the source
- * location into the shared in-transit location, releasing the reservation it consumes.
- * Destination On Hand does NOT increase yet — that only happens on confirmReceipt.
+ * The assigned operator starts delivery: physically moves whatever quantity is still
+ * outstanding for this round out of the source location into the shared in-transit
+ * location, releasing the reservation it consumes. If nothing new needs to move (e.g.
+ * re-attempting delivery after NOT_RECEIVED, where the material never came back) this
+ * still transitions the status but posts no additional ledger movement.
  */
-export async function issueStock(requestId: string, quantity: number, actingUserId: string) {
+export async function startDelivery(requestId: string, actingUserId: string) {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: actingUserId } });
-  requireRole(user, FULFILMENT_ROLES);
+  requireRole(user, OPERATOR_ROLES);
   const request = await getRequestOrThrow(requestId);
-  if (request.status !== "ALLOCATED") throw new RequestError(`Cannot issue stock for a request with status ${request.status}`);
-  if (quantity <= 0) throw new RequestError("Issue quantity must be greater than zero");
+  if (request.assignedToUserId !== user.id && user.role !== ADMIN_ROLE) throw new PermissionError("Only the assigned operator can start delivery for this request");
+  if (request.status !== "ASSIGNED") throw new RequestError(`Cannot start delivery for a request with status ${request.status}`);
 
-  const activeReserved = request.allocatedQuantity - request.issuedQuantity;
-  if (quantity > activeReserved + 1e-6) {
-    throw new RequestError(`Cannot issue ${quantity} — only ${activeReserved} is currently allocated and unissued.`);
+  const quantity = request.quantityRequested - request.deliveredQuantity;
+  if (quantity > 1e-6) {
+    const material = await prisma.material.findUniqueOrThrow({ where: { id: request.materialId } });
+    await postTransferOut({ materialId: request.materialId, quantity, uom: material.uom, sourceLocationId: request.fromLocationId, reference: request.requestNumber, userId: user.id });
+    // postTransferOut's source leg allows negative on hand (stock-sufficiency validation is
+    // deliberately disabled on this path) — if the source had QC Hold/Blocked stock recorded,
+    // On Hand can now sit below it. Self-corrects rather than gating this frozen path.
+    await reconcileQualityBalances(request.materialId, request.fromLocationId);
+    await prisma.stockReservation.updateMany({ where: { stockRequestId: requestId, status: "ACTIVE" }, data: { status: "RELEASED", releasedAt: new Date() } });
   }
 
-  const material = await prisma.material.findUniqueOrThrow({ where: { id: request.materialId } });
-  await postTransferOut({ materialId: request.materialId, quantity, uom: material.uom, sourceLocationId: request.fromLocationId, reference: request.requestNumber, userId: user.id });
-
-  // This simplified demo releases the whole active reservation for the request when any
-  // portion is issued — supporting a partial issue of a single allocation batch would need
-  // per-reservation quantity splitting, which isn't needed for the lifecycle this enhancement covers.
-  await prisma.stockReservation.updateMany({ where: { stockRequestId: requestId, status: "ACTIVE" }, data: { status: "RELEASED", releasedAt: new Date() } });
-
-  const updated = await prisma.stockRequest.update({ where: { id: requestId }, data: { issuedQuantity: request.issuedQuantity + quantity, status: "IN_TRANSIT" } });
-  await logEvent({ stockRequestId: requestId, action: "ISSUED", userId: user.id, role: user.role, quantity, fromLocationId: request.fromLocationId ?? undefined, toLocationId: request.toLocationId });
+  const updated = await prisma.stockRequest.update({ where: { id: requestId }, data: { deliveredQuantity: request.deliveredQuantity + quantity, status: "IN_TRANSIT" } });
+  await logEvent({ stockRequestId: requestId, action: "IN_TRANSIT", userId: user.id, role: user.role, quantity, fromLocationId: request.fromLocationId, toLocationId: request.toLocationId });
   return updated;
 }
 
 /**
- * The requester confirms physical receipt at the To Location: moves stock from the
- * in-transit location into destination On Hand. Auto-completes the request once the
- * full requested quantity has been received; otherwise leaves it PARTIALLY_RECEIVED
- * so another allocate/issue/receive round can run.
+ * The assigned operator marks the material as physically delivered to the destination.
+ * This does NOT complete the request and does NOT move any stock — the material is
+ * already sitting in the in-transit bucket. Only the requester's own confirmation closes it.
  */
-export async function confirmReceipt(requestId: string, quantity: number, actingUserId: string) {
+export async function markDelivered(requestId: string, actingUserId: string, deliveryNote?: string) {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: actingUserId } });
-  requireRole(user, ["REQUESTER"]);
+  requireRole(user, OPERATOR_ROLES);
   const request = await getRequestOrThrow(requestId);
-  if (request.requestedByUserId !== user.id) throw new PermissionError("Only the requester who raised this request can confirm receipt of it");
-  if (request.status !== "IN_TRANSIT") throw new RequestError(`Cannot confirm receipt for a request with status ${request.status}`);
+  if (request.assignedToUserId !== user.id && user.role !== ADMIN_ROLE) throw new PermissionError("Only the assigned operator can mark this request delivered");
+  if (request.status !== "IN_TRANSIT") throw new RequestError(`Cannot mark delivered for a request with status ${request.status}`);
+
+  const updated = await prisma.stockRequest.update({ where: { id: requestId }, data: { status: "DELIVERED", deliveredByUserId: user.id, deliveredAt: new Date(), deliveryNote } });
+  const inTransitForRound = request.deliveredQuantity - request.receivedQuantity;
+  await logEvent({ stockRequestId: requestId, action: "DELIVERED", userId: user.id, role: user.role, quantity: inTransitForRound, toLocationId: request.toLocationId, reason: deliveryNote });
+  return updated;
+}
+
+/**
+ * The original requester confirms physical receipt: moves stock from the in-transit
+ * bucket into destination On Hand. Auto-completes once the full requested quantity has
+ * been received; otherwise leaves the same request PARTIALLY_RECEIVED so the supervisor
+ * can arrange the remaining quantity — never a new Request ID.
+ */
+export async function confirmReceipt(requestId: string, quantity: number, actingUserId: string, note?: string) {
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: actingUserId } });
+  requireRole(user, ["REQUESTER", ADMIN_ROLE]);
+  const request = await getRequestOrThrow(requestId);
+  if (request.requestedByUserId !== user.id && user.role !== ADMIN_ROLE) throw new PermissionError("Only the requester who raised this request can confirm receipt of it");
+  if (request.status !== "DELIVERED") throw new RequestError(`Cannot confirm receipt for a request with status ${request.status}`);
   if (quantity <= 0) throw new RequestError("Received quantity must be greater than zero");
 
-  const inTransitForRequest = request.issuedQuantity - request.receivedQuantity;
-  if (quantity > inTransitForRequest + 1e-6) {
-    throw new RequestError(`Cannot receive ${quantity} — only ${inTransitForRequest} is currently in transit for this request.`);
-  }
-
+  // No validation, per explicit request — confirming more than was ever delivered is allowed.
   const material = await prisma.material.findUniqueOrThrow({ where: { id: request.materialId } });
   await postTransferIn({ materialId: request.materialId, quantity, uom: material.uom, destinationLocationId: request.toLocationId, reference: request.requestNumber, userId: user.id });
 
@@ -188,44 +239,25 @@ export async function confirmReceipt(requestId: string, quantity: number, acting
     where: { id: requestId },
     data: { receivedQuantity: newReceived, status: isComplete ? "COMPLETED" : "PARTIALLY_RECEIVED", completedAt: isComplete ? new Date() : undefined },
   });
-  await logEvent({ stockRequestId: requestId, action: isComplete ? "RECEIVED" : "PARTIALLY_RECEIVED", userId: user.id, role: user.role, quantity, toLocationId: request.toLocationId });
+  await logEvent({ stockRequestId: requestId, action: isComplete ? "RECEIVED" : "PARTIALLY_RECEIVED", userId: user.id, role: user.role, quantity, toLocationId: request.toLocationId, reason: note });
   if (isComplete) await logEvent({ stockRequestId: requestId, action: "COMPLETED", userId: user.id, role: user.role });
   return updated;
 }
 
 /**
- * Pre-flight check for the external-replenishment path — call this BEFORE posting a
- * GRN's ledger transaction, so a rejected external receipt never leaves an orphaned,
- * unlinked movement (same principle as the internal lifecycle's own guards).
+ * The requester reports that delivered material never actually arrived. This is an
+ * exception, not a close — the request moves to the Store Supervisor's exception queue
+ * for investigation/re-delivery via assignOperator, keeping the same Request ID.
  */
-export async function assertExternalReceiptAllowed(requestId: string, quantity: number) {
+export async function markNotReceived(requestId: string, actingUserId: string, reason: string) {
+  if (!reason?.trim()) throw new RequestError("A reason is required to mark a request as not received");
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: actingUserId } });
+  requireRole(user, ["REQUESTER", ADMIN_ROLE]);
   const request = await getRequestOrThrow(requestId);
-  if (!["PENDING", "ACCEPTED", "PARTIALLY_RECEIVED"].includes(request.status)) {
-    throw new RequestError(`Cannot apply an external receipt to a request with status ${request.status}`);
-  }
-  const remaining = request.quantityRequested - request.receivedQuantity;
-  if (quantity > remaining + 1e-6) {
-    throw new RequestError(`External receipt quantity (${quantity}) exceeds the remaining requested quantity (${remaining}).`);
-  }
-  return request;
-}
+  if (request.requestedByUserId !== user.id && user.role !== ADMIN_ROLE) throw new PermissionError("Only the requester who raised this request can report it not received");
+  if (request.status !== "DELIVERED") throw new RequestError(`Cannot mark not received for a request with status ${request.status}`);
 
-/**
- * External-replenishment path (see procurement.ts): a Material Receipt/GRN linked to
- * this request was posted, so its accepted quantity fulfils the request directly —
- * bypassing allocate/issue/in-transit entirely, since the material never came from an
- * internal location. Same request ID stays attached throughout, per spec.
- */
-export async function applyExternalReceipt(input: { requestId: string; quantity: number; actingUserId: string }) {
-  const request = await assertExternalReceiptAllowed(input.requestId, input.quantity);
-  const user = await prisma.user.findUniqueOrThrow({ where: { id: input.actingUserId } });
-  const newReceived = request.receivedQuantity + input.quantity;
-  const isComplete = newReceived >= request.quantityRequested - 1e-6;
-  const updated = await prisma.stockRequest.update({
-    where: { id: request.id },
-    data: { receivedQuantity: newReceived, status: isComplete ? "COMPLETED" : "PARTIALLY_RECEIVED", completedAt: isComplete ? new Date() : undefined },
-  });
-  await logEvent({ stockRequestId: request.id, action: isComplete ? "RECEIVED" : "PARTIALLY_RECEIVED", userId: user.id, role: user.role, quantity: input.quantity, reason: "Received via external Material Receipt / GRN" });
-  if (isComplete) await logEvent({ stockRequestId: request.id, action: "COMPLETED", userId: user.id, role: user.role });
+  const updated = await prisma.stockRequest.update({ where: { id: requestId }, data: { status: "NOT_RECEIVED", notReceivedReason: reason, notReceivedAt: new Date() } });
+  await logEvent({ stockRequestId: requestId, action: "NOT_RECEIVED", userId: user.id, role: user.role, reason });
   return updated;
 }

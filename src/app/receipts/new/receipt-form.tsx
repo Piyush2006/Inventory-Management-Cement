@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { actionCreateMaterialReceipt } from "@/app/actions";
 import { SupplierPicker } from "../supplier-picker";
 import { formatNumber } from "@/lib/format";
+import { QUALITY_STATUSES, QUALITY_STATUS_LABELS } from "@/lib/domain/enums";
 
 type Material = { id: string; name: string; uom: string };
 type Location = { id: string; name: string };
@@ -18,7 +19,6 @@ export function ReceiptForm({
   purchaseReferences,
   defaultMaterialId,
   defaultPurchaseReferenceId,
-  defaultStockRequestId,
 }: {
   materials: Material[];
   locations: Location[];
@@ -26,7 +26,6 @@ export function ReceiptForm({
   purchaseReferences: PurchaseRef[];
   defaultMaterialId?: string;
   defaultPurchaseReferenceId?: string;
-  defaultStockRequestId?: string;
 }) {
   const router = useRouter();
   const [purchaseReferenceId, setPurchaseReferenceId] = useState(defaultPurchaseReferenceId ?? "");
@@ -63,7 +62,6 @@ export function ReceiptForm({
 
   return (
     <form className="space-y-6">
-      {defaultStockRequestId && <input type="hidden" name="stockRequestId" value={defaultStockRequestId} />}
       <input type="hidden" name="purchaseReferenceId" value={selectedPo?.id ?? ""} />
 
       <section className="space-y-3">
@@ -123,7 +121,16 @@ export function ReceiptForm({
             Batch / Lot (optional)
             <input name="batchLot" className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
           </label>
+          <label className="text-xs text-muted">
+            Quality status
+            <select name="qualityStatus" defaultValue="UNRESTRICTED" className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
+              {QUALITY_STATUSES.map((q) => (
+                <option key={q} value={q}>{QUALITY_STATUS_LABELS[q]}</option>
+              ))}
+            </select>
+          </label>
         </div>
+        <p className="text-xs text-muted-soft">QC Hold or Blocked stock still posts to inventory but is excluded from what&apos;s available to request, consume, or dispatch until released.</p>
       </section>
 
       <section className="space-y-3">

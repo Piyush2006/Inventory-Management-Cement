@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { postMovement, postAdjustment } from "@/lib/inventory/ledger";
-import { assertExternalReceiptAllowed, applyExternalReceipt } from "@/lib/inventory/requests";
-import { getCurrentUser } from "@/lib/auth";
+import { changeQualityStatus, reconcileQualityBalances } from "@/lib/inventory/quality";
+import type { QualityStatus } from "@/lib/domain/enums";
 
 export class ProcurementError extends Error {}
 
@@ -40,7 +40,6 @@ export async function createPurchaseReference(input: {
   orderedQuantity: number;
   expectedDeliveryDate?: Date;
   note?: string;
-  stockRequestId?: string;
 }) {
   if (input.orderedQuantity <= 0) throw new ProcurementError("Ordered quantity must be greater than zero");
   return prisma.purchaseReference.create({
@@ -51,7 +50,6 @@ export async function createPurchaseReference(input: {
       orderedQuantity: input.orderedQuantity,
       expectedDeliveryDate: input.expectedDeliveryDate,
       note: input.note,
-      stockRequestId: input.stockRequestId,
       status: "EXPECTED",
     },
   });
@@ -66,6 +64,7 @@ export interface CreateReceiptInput {
   acceptedQuantity: number;
   rejectedQuantity?: number; // if omitted, derived as receivedQuantity - acceptedQuantity
   destinationLocationId: string;
+  qualityStatus?: QualityStatus; // defaults to UNRESTRICTED — the receiver flags QC_HOLD/BLOCKED explicitly
   batchLot?: string;
   invoiceNumber?: string;
   invoiceDate?: Date;
@@ -75,7 +74,6 @@ export interface CreateReceiptInput {
   vehicleReference?: string;
   truckNumber?: string;
   notes?: string;
-  stockRequestId?: string;
   allowOverReceipt?: boolean;
 }
 
@@ -94,19 +92,9 @@ async function validateReceiptQuantities(input: CreateReceiptInput) {
   const location = await prisma.location.findUniqueOrThrow({ where: { id: input.destinationLocationId } });
   if (!location.active) throw new ProcurementError("Destination location is not active");
 
-  if (input.purchaseReferenceId && !input.allowOverReceipt) {
-    const po = await prisma.purchaseReference.findUniqueOrThrow({ where: { id: input.purchaseReferenceId } });
-    const priorReceived = await prisma.materialReceipt.aggregate({
-      where: { purchaseReferenceId: input.purchaseReferenceId, status: { in: ["DRAFT", "POSTED"] } },
-      _sum: { receivedQuantity: true },
-    });
-    const already = priorReceived._sum.receivedQuantity ?? 0;
-    if (already + input.receivedQuantity > po.orderedQuantity + 1e-6) {
-      throw new ProcurementError(
-        `Received quantity would exceed the ordered quantity on ${po.poNumber} (${already.toLocaleString()} already received/drafted of ${po.orderedQuantity.toLocaleString()} ordered). Tick "allow over-receipt" to proceed anyway.`
-      );
-    }
-  }
+  // No validation, per explicit request — a receipt against a PO can exceed its ordered
+  // quantity freely; "allow over-receipt" in the UI is a no-op now, kept only so the form
+  // doesn't need a matching edit.
 
   return rejected;
 }
@@ -131,6 +119,7 @@ export async function createMaterialReceipt(input: CreateReceiptInput) {
       acceptedQuantity: input.acceptedQuantity,
       rejectedQuantity,
       destinationLocationId: input.destinationLocationId,
+      qualityStatus: input.qualityStatus ?? "UNRESTRICTED",
       batchLot: input.batchLot,
       invoiceNumber: input.invoiceNumber,
       invoiceDate: input.invoiceDate,
@@ -140,7 +129,6 @@ export async function createMaterialReceipt(input: CreateReceiptInput) {
       vehicleReference: input.vehicleReference,
       truckNumber: input.truckNumber,
       notes: input.notes,
-      stockRequestId: input.stockRequestId,
       status: "DRAFT",
     },
   });
@@ -148,10 +136,9 @@ export async function createMaterialReceipt(input: CreateReceiptInput) {
 
 /**
  * Posts a DRAFT GRN: increases inventory by acceptedQuantity ONLY (never ordered or
- * received), links the ledger row back to the GRN, rolls the linked PO's status
- * forward, and — if the GRN was raised against a stock request — fulfils it too.
+ * received), links the ledger row back to the GRN, and rolls the linked PO's status forward.
  */
-export async function postMaterialReceipt(receiptId: string, actingUserId?: string) {
+export async function postMaterialReceipt(receiptId: string, userId?: string) {
   const receipt = await prisma.materialReceipt.findUniqueOrThrow({ where: { id: receiptId }, include: { material: true } });
   if (receipt.status !== "DRAFT") throw new ProcurementError(`Only a DRAFT receipt can be posted (this one is ${receipt.status})`);
 
@@ -168,10 +155,6 @@ export async function postMaterialReceipt(receiptId: string, actingUserId?: stri
     allowOverReceipt: true, // this draft already reserved its share when created
   });
 
-  if (receipt.stockRequestId && receipt.acceptedQuantity > 0) {
-    await assertExternalReceiptAllowed(receipt.stockRequestId, receipt.acceptedQuantity);
-  }
-
   let tx = null;
   if (receipt.acceptedQuantity > 0) {
     tx = await postMovement({
@@ -183,7 +166,23 @@ export async function postMaterialReceipt(receiptId: string, actingUserId?: stri
       timestamp: receipt.receiptDate,
       reference: receipt.grnNumber,
       batchLot: receipt.batchLot ?? undefined,
+      userId,
     });
+    // Additive on top of the RECEIPT above — never changes what it posts. Only when the
+    // receiver flagged this GRN QC_HOLD/BLOCKED does any of the accepted quantity move out
+    // of UNRESTRICTED; default (and every existing GRN) is unaffected.
+    if (receipt.qualityStatus !== "UNRESTRICTED") {
+      await changeQualityStatus({
+        materialId: receipt.materialId,
+        locationId: receipt.destinationLocationId,
+        quantity: receipt.acceptedQuantity,
+        fromStatus: "UNRESTRICTED",
+        toStatus: receipt.qualityStatus as "QC_HOLD" | "BLOCKED",
+        userId: userId ?? "system",
+        reason: `Set at GRN receipt ${receipt.grnNumber}`,
+        reference: receipt.grnNumber,
+      });
+    }
   }
 
   const updated = await prisma.materialReceipt.update({
@@ -192,18 +191,13 @@ export async function postMaterialReceipt(receiptId: string, actingUserId?: stri
   });
 
   if (receipt.purchaseReferenceId) await recomputePurchaseReferenceStatus(receipt.purchaseReferenceId);
-  if (receipt.stockRequestId && tx && receipt.acceptedQuantity > 0) {
-    const resolvedUserId = actingUserId ?? (await getCurrentUser()).id;
-    await applyExternalReceipt({ requestId: receipt.stockRequestId, quantity: receipt.acceptedQuantity, actingUserId: resolvedUserId });
-  }
-
   return updated;
 }
 
 /** Convenience: create + immediately post in one call, for the common "receive now" case. */
-export async function createAndPostMaterialReceipt(input: CreateReceiptInput, actingUserId?: string) {
+export async function createAndPostMaterialReceipt(input: CreateReceiptInput, userId?: string) {
   const receipt = await createMaterialReceipt(input);
-  return postMaterialReceipt(receipt.id, actingUserId);
+  return postMaterialReceipt(receipt.id, userId);
 }
 
 /**
@@ -226,6 +220,10 @@ export async function cancelMaterialReceipt(receiptId: string, reason: string) {
       reference: receipt.grnNumber,
     });
     await prisma.materialReceipt.update({ where: { id: receipt.id }, data: { status: "CANCELLED", reversalTransactionId: reversal.id } });
+    // The reversal bypasses the normal negative-balance guard (postAdjustment always does) — if
+    // this receipt had been flagged QC_HOLD/BLOCKED, On Hand can now sit below what QualityBalance
+    // still claims is on hold at this location. Self-corrects rather than gating this shared path.
+    await reconcileQualityBalances(receipt.materialId, receipt.destinationLocationId);
   } else {
     await prisma.materialReceipt.update({ where: { id: receipt.id }, data: { status: "CANCELLED" } });
   }

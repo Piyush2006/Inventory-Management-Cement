@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import type { UserRole } from "@/lib/domain/enums";
 
@@ -34,4 +35,23 @@ export function requireRole(user: { role: string; name: string }, allowed: UserR
   if (!allowed.includes(user.role as UserRole)) {
     throw new PermissionError(`${user.name} (${user.role}) is not permitted to perform this action — requires ${allowed.join(" or ")}.`);
   }
+}
+
+/**
+ * A Requester's entire surface is Requests (raise, view own, confirm/not-received) —
+ * no Dashboard, Inventory, Locations, Materials, or Stock Operations. Call at the top
+ * of every page outside /requests so a Requester can't reach it even by typing the URL,
+ * not just by not seeing it in the sidebar.
+ */
+export function restrictToRequestsOnly(user: { role: string }) {
+  if (user.role === "REQUESTER") redirect("/requests");
+}
+
+/**
+ * Store Supervisor's job is managing the request queue, not touching stock directly — per
+ * the RBAC matrix its Stock Operations cell is a bare "no access" (unlike its view-only
+ * access to Dashboard/Inventory/etc), so it's blocked outright here, not just hidden buttons.
+ */
+export function restrictStockOperationsFromSupervisor(user: { role: string }) {
+  if (user.role === "STORE_SUPERVISOR") redirect("/");
 }

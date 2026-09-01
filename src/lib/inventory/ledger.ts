@@ -101,8 +101,11 @@ export async function postMovement(input: PostMovementInput) {
       materialId: input.materialId,
       locationId: input.locationId,
       delta: balanceDelta,
-      allowNegative: input.allowNegative,
-      allowOverCapacity: input.allowOverCapacity,
+      // No stock movement is blocked by what's on hand or a location's nominal capacity, per
+      // explicit request — both are informational only (a negative or over-100%-full figure is
+      // still shown honestly, never prevented). An explicit override still wins either way.
+      allowNegative: input.allowNegative ?? true,
+      allowOverCapacity: input.allowOverCapacity ?? true,
     });
 
     return record;
@@ -179,17 +182,18 @@ export async function postTransfer(input: {
         userId: input.userId,
       },
     });
-    await applyBalanceDelta(db, { materialId: input.materialId, locationId: input.sourceLocationId, delta: -input.quantity });
-    await applyBalanceDelta(db, { materialId: input.materialId, locationId: input.destinationLocationId, delta: input.quantity });
+    // No validation, per explicit request — see postMovement.
+    await applyBalanceDelta(db, { materialId: input.materialId, locationId: input.sourceLocationId, delta: -input.quantity, allowNegative: true });
+    await applyBalanceDelta(db, { materialId: input.materialId, locationId: input.destinationLocationId, delta: input.quantity, allowOverCapacity: true });
     return record;
   });
 }
 
 /**
  * Leg 1 of a request-driven internal movement: moves stock from the source location
- * into the shared "In Transit (Internal)" location. Used by requests.ts's issueStock —
+ * into the shared "In Transit (Internal)" location. Used by requests.ts's startDelivery —
  * NOT the same as postTransfer, which moves stock in one atomic instant hop with no
- * in-transit visibility.
+ * in-transit visibility (used by plain Stock Operations transfers, unrelated to a request).
  */
 export async function postTransferOut(input: {
   materialId: string;
@@ -217,7 +221,9 @@ export async function postTransferOut(input: {
         userId: input.userId,
       },
     });
-    await applyBalanceDelta(db, { materialId: input.materialId, locationId: input.sourceLocationId, delta: -input.quantity });
+    // allowNegative: stock-sufficiency validation is disabled for now, per explicit request —
+    // Start Delivery must never be blocked here even if the source is short or empty.
+    await applyBalanceDelta(db, { materialId: input.materialId, locationId: input.sourceLocationId, delta: -input.quantity, allowNegative: true });
     await applyBalanceDelta(db, { materialId: input.materialId, locationId: inTransit.id, delta: input.quantity });
     return record;
   });
@@ -250,57 +256,11 @@ export async function postTransferIn(input: {
         userId: input.userId,
       },
     });
-    await applyBalanceDelta(db, { materialId: input.materialId, locationId: inTransit.id, delta: -input.quantity });
-    await applyBalanceDelta(db, { materialId: input.materialId, locationId: input.destinationLocationId, delta: input.quantity });
+    // No validation, per explicit request — see postMovement. Confirming receipt of more than
+    // was ever delivered is allowed; the in-transit bucket can go negative rather than block.
+    await applyBalanceDelta(db, { materialId: input.materialId, locationId: inTransit.id, delta: -input.quantity, allowNegative: true });
+    await applyBalanceDelta(db, { materialId: input.materialId, locationId: input.destinationLocationId, delta: input.quantity, allowOverCapacity: true });
     return record;
   });
 }
 
-/**
- * Packing converts bulk finished-goods stock into bagged stock of the same
- * tonnage plus consumption of bag packing material. Bag count is never stored
- * — it's always derived from (bagged tonnage / bagWeightKg) at read time, so
- * bag count and tonnage can never drift apart.
- */
-export async function postPacking(input: {
-  bulkMaterialId: string;
-  bulkLocationId: string;
-  bulkQuantity: number; // MT
-  bagMaterialId: string; // packing material (Nos)
-  bagLocationId: string;
-  baggedMaterialId: string; // finished bagged material (MT)
-  baggedLocationId: string;
-  timestamp?: Date;
-  userId?: string;
-}) {
-  if (input.bulkQuantity <= 0) throw new InventoryError("bulk quantity must be positive");
-
-  return prisma.$transaction(async (db) => {
-    const baggedMaterial = await db.material.findUniqueOrThrow({ where: { id: input.baggedMaterialId } });
-    if (!baggedMaterial.bagWeightKg) throw new InventoryError("bagged material must define bagWeightKg");
-    const bagsNeeded = Math.round((input.bulkQuantity * 1000) / baggedMaterial.bagWeightKg);
-    const timestamp = input.timestamp ?? new Date();
-
-    await db.inventoryTransaction.create({
-      data: { materialId: input.bulkMaterialId, transactionType: "PACKING", quantity: input.bulkQuantity, uom: "MT", timestamp, sourceLocationId: input.bulkLocationId, userId: input.userId },
-    });
-    await db.inventoryTransaction.create({
-      data: { materialId: input.bagMaterialId, transactionType: "PACKING", quantity: bagsNeeded, uom: "Nos", timestamp, sourceLocationId: input.bagLocationId, userId: input.userId },
-    });
-    await db.inventoryTransaction.create({
-      data: { materialId: input.baggedMaterialId, transactionType: "PACKING", quantity: input.bulkQuantity, uom: "MT", timestamp, destinationLocationId: input.baggedLocationId, userId: input.userId },
-    });
-
-    await applyBalanceDelta(db, { materialId: input.bulkMaterialId, locationId: input.bulkLocationId, delta: -input.bulkQuantity });
-    await applyBalanceDelta(db, { materialId: input.bagMaterialId, locationId: input.bagLocationId, delta: -bagsNeeded });
-    await applyBalanceDelta(db, { materialId: input.baggedMaterialId, locationId: input.baggedLocationId, delta: input.bulkQuantity });
-
-    return { bagsNeeded };
-  });
-}
-
-/** Derive bag count for a bagged material balance — never stored, so it can't drift from tonnage. */
-export function deriveBagCount(tonnage: number, bagWeightKg: number | null | undefined) {
-  if (!bagWeightKg) return null;
-  return Math.round((tonnage * 1000) / bagWeightKg);
-}

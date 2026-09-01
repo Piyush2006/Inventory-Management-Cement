@@ -4,7 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { actionRecordCountAndAdjust } from "@/app/actions";
 import { formatNumber } from "@/lib/format";
 
-type BalanceRow = { materialId: string; materialName: string; uom: string; locationId: string; locationName: string; quantity: number };
+type BalanceRow = { materialId: string; materialName: string; uom: string; locationId: string; locationName: string; quantity: number; tolerancePct: number };
 
 export function CountAdjustForm({ balances }: { balances: BalanceRow[] }) {
   const [locationId, setLocationId] = useState("");
@@ -12,7 +12,7 @@ export function CountAdjustForm({ balances }: { balances: BalanceRow[] }) {
   const [counted, setCounted] = useState("");
   const [reason, setReason] = useState("");
   const [pending, startTransition] = useTransition();
-  const [result, setResult] = useState<{ ok: boolean; error?: string; varianceQty?: number; adjusted?: boolean } | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; error?: string; varianceQty?: number; adjusted?: boolean; pendingApproval?: boolean } | null>(null);
 
   const locations = useMemo(() => [...new Map(balances.map((b) => [b.locationId, b.locationName])).entries()], [balances]);
   const materialsForLocation = useMemo(() => balances.filter((b) => b.locationId === locationId), [balances, locationId]);
@@ -23,6 +23,7 @@ export function CountAdjustForm({ balances }: { balances: BalanceRow[] }) {
   const variance = hasCount ? countedNum - selected.quantity : null;
   const variancePct = hasCount && variance != null ? (selected!.quantity === 0 ? (variance === 0 ? 0 : 100) : (variance / selected!.quantity) * 100) : null;
   const needsReason = variance != null && Math.abs(variance) > 1e-9;
+  const withinTolerance = needsReason && selected && variancePct != null ? Math.abs(variancePct) <= selected.tolerancePct : null;
 
   return (
     <form
@@ -88,6 +89,13 @@ export function CountAdjustForm({ balances }: { balances: BalanceRow[] }) {
         </div>
       )}
 
+      {withinTolerance != null && (
+        <div className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${withinTolerance ? "text-[var(--status-healthy)] bg-[var(--status-healthy-bg)]" : "text-[var(--status-warning)] bg-[var(--status-warning-bg)]"}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${withinTolerance ? "bg-[var(--status-healthy)]" : "bg-[var(--status-warning)]"}`} />
+          {withinTolerance ? `Within Tolerance (±${selected!.tolerancePct}%)` : `Investigation Required — beyond ±${selected!.tolerancePct}% tolerance`}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="text-xs text-muted">
           Counted by
@@ -108,8 +116,12 @@ export function CountAdjustForm({ balances }: { balances: BalanceRow[] }) {
 
       {result && !result.ok && <div className="text-sm text-[var(--status-critical)]">{result.error}</div>}
       {result?.ok && (
-        <div className="text-sm text-[var(--status-healthy)]">
-          {result.adjusted ? `Count recorded and adjustment posted (${result.varianceQty! >= 0 ? "+" : ""}${formatNumber(result.varianceQty!)}).` : "Count recorded — matched book stock, nothing to adjust."}
+        <div className={`text-sm ${result.pendingApproval ? "text-[var(--status-warning)]" : "text-[var(--status-healthy)]"}`}>
+          {result.adjusted
+            ? `Count recorded and adjustment posted (${result.varianceQty! >= 0 ? "+" : ""}${formatNumber(result.varianceQty!)}).`
+            : result.pendingApproval
+              ? `Count recorded (variance ${result.varianceQty! >= 0 ? "+" : ""}${formatNumber(result.varianceQty!)}) — awaiting Inventory Manager approval before the adjustment posts.`
+              : "Count recorded — matched book stock, nothing to adjust."}
         </div>
       )}
 

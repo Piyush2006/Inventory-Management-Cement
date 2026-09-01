@@ -1,30 +1,31 @@
 import { notFound } from "next/navigation";
-import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { Panel, KpiTile, Th, Td, EmptyState } from "@/components/ui";
 import { RequestStatusBadge } from "@/components/status-badge";
 import { formatNumber, formatDate, formatDateTime } from "@/lib/format";
-import { FULFILMENT_ROLES } from "@/lib/domain/enums";
+import { ACCEPT_REJECT_ROLES, ROUTE_ROLES, ASSIGN_ROLES, type UserRole } from "@/lib/domain/enums";
 import { RequestActionPanel } from "./request-action-panel";
 
 export const dynamic = "force-dynamic";
 
 const EVENT_LABEL: Record<string, string> = {
-  REQUEST_RAISED: "Request Raised",
+  REQUEST_CREATED: "Request Created",
   ACCEPTED: "Request Accepted",
   REJECTED: "Request Rejected",
-  ALLOCATED: "Stock Allocated",
-  ISSUED: "Stock Issued — In Transit",
-  RECEIVED: "Material Received",
-  PARTIALLY_RECEIVED: "Material Partially Received",
-  COMPLETED: "Request Completed",
-  CANCELLED: "Request Cancelled",
+  ROUTED: "Routed to Supervisor",
+  ASSIGNED: "Assigned",
+  IN_TRANSIT: "In Transit",
+  DELIVERED: "Delivered",
+  NOT_RECEIVED: "Not Received",
+  RECEIVED: "Receipt Confirmed",
+  PARTIALLY_RECEIVED: "Partially Received",
+  COMPLETED: "Completed",
 };
 
 export default async function RequestDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [request, currentUser] = await Promise.all([
+  const [request, currentUser, supervisors, operators] = await Promise.all([
     prisma.stockRequest.findUnique({
       where: { id },
       include: {
@@ -34,12 +35,15 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
         requestedBy: true,
         acceptedBy: true,
         rejectedBy: true,
+        routedTo: true,
+        assignedTo: true,
+        deliveredBy: true,
         events: { include: { user: true }, orderBy: { timestamp: "asc" } },
-        purchaseReferences: { include: { supplier: true } },
-        materialReceipts: { include: { supplier: true } },
       },
     }),
     getCurrentUser(),
+    prisma.user.findMany({ where: { role: "STORE_SUPERVISOR", active: true }, orderBy: { name: "asc" } }),
+    prisma.user.findMany({ where: { role: "STORE_OPERATOR", active: true }, orderBy: { name: "asc" } }),
   ]);
   if (!request) notFound();
 
@@ -49,14 +53,18 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
     orderBy: { timestamp: "asc" },
   });
 
-  const remainingToAllocate = request.quantityRequested - request.allocatedQuantity;
-  const activeReserved = request.allocatedQuantity - request.issuedQuantity;
-  const inTransitForRequest = request.issuedQuantity - request.receivedQuantity;
   const remaining = request.quantityRequested - request.receivedQuantity;
+  const deliveredNotYetReceived = request.deliveredQuantity - request.receivedQuantity;
 
-  const isFulfilmentRole = FULFILMENT_ROLES.includes(currentUser.role as "STORE_OPERATOR" | "INVENTORY_MANAGER");
-  const isRequester = currentUser.role === "REQUESTER";
-  const isOwnRequest = currentUser.id === request.requestedByUserId;
+  // ACCEPT_REJECT_ROLES / ROUTE_ROLES / ASSIGN_ROLES already include Admin. For the
+  // ownership-based checks below, Admin bypasses them explicitly — full access means acting
+  // on any request.
+  const canAcceptReject = ACCEPT_REJECT_ROLES.includes(currentUser.role as UserRole);
+  const canRoute = ROUTE_ROLES.includes(currentUser.role as UserRole);
+  const canAssignOperator = ASSIGN_ROLES.includes(currentUser.role as UserRole);
+  const isRoutedSupervisor = currentUser.id === request.routedToUserId || currentUser.role === "ADMIN";
+  const isAssignedOperator = currentUser.id === request.assignedToUserId || currentUser.role === "ADMIN";
+  const isRequester = currentUser.id === request.requestedByUserId || currentUser.role === "ADMIN";
 
   return (
     <div className="space-y-6">
@@ -70,25 +78,28 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
         <RequestStatusBadge status={request.status as never} />
       </div>
 
-      <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
+      <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
         <KpiTile label="Requested" value={`${formatNumber(request.quantityRequested)}`} />
-        <KpiTile label="Allocated" value={formatNumber(request.allocatedQuantity)} />
-        <KpiTile label="Issued" value={formatNumber(request.issuedQuantity)} />
-        <KpiTile label="In Transit" value={formatNumber(inTransitForRequest)} tone={inTransitForRequest > 0 ? "warning" : "default"} />
+        <KpiTile label="Delivered" value={formatNumber(request.deliveredQuantity)} />
         <KpiTile label="Received" value={formatNumber(request.receivedQuantity)} tone="healthy" />
         <KpiTile label="Remaining" value={formatNumber(remaining)} tone={remaining > 0 ? "warning" : "healthy"} />
+        <KpiTile label="Variance (delivered, unconfirmed)" value={formatNumber(deliveredNotYetReceived)} tone={deliveredNotYetReceived > 0 ? "warning" : "default"} />
       </div>
 
       <Panel title="Action">
         <RequestActionPanel
           requestId={request.id}
           status={request.status}
-          isFulfilmentRole={isFulfilmentRole}
+          canAcceptReject={canAcceptReject}
+          canRoute={canRoute}
+          canAssignOperator={canAssignOperator}
+          isRoutedSupervisor={isRoutedSupervisor}
+          routedToName={request.routedTo?.name ?? null}
+          isAssignedOperator={isAssignedOperator}
           isRequester={isRequester}
-          isOwnRequest={isOwnRequest}
-          remainingToAllocate={remainingToAllocate}
-          activeReserved={activeReserved}
-          inTransitForRequest={inTransitForRequest}
+          supervisors={supervisors.map((s) => ({ id: s.id, name: s.name }))}
+          operators={operators.map((o) => ({ id: o.id, name: o.name }))}
+          deliveredNotYetReceived={deliveredNotYetReceived}
           uom={request.material.uom}
         />
       </Panel>
@@ -116,6 +127,12 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
                 <dd className="text-[var(--status-critical)]">{request.rejectionReason}</dd>
               </>
             )}
+            {request.status === "NOT_RECEIVED" && (
+              <>
+                <dt className="text-muted">Not Received Reason</dt>
+                <dd className="text-[var(--status-critical)]">{request.notReceivedReason}</dd>
+              </>
+            )}
           </dl>
         </Panel>
 
@@ -125,32 +142,19 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
             <dd className="text-foreground">{request.requestedBy.name} <span className="text-xs text-muted-soft">({request.requestedByRole})</span></dd>
             <dt className="text-muted">Accepted By</dt>
             <dd className="text-foreground">{request.acceptedBy ? `${request.acceptedBy.name} — ${formatDateTime(request.acceptedAt!)}` : "—"}</dd>
-            <dt className="text-muted">Rejected By</dt>
-            <dd className="text-foreground">{request.rejectedBy ? `${request.rejectedBy.name} — ${formatDateTime(request.rejectedAt!)}` : "—"}</dd>
+            <dt className="text-muted">Routed To</dt>
+            <dd className="text-foreground">{request.routedTo ? `${request.routedTo.name} — ${formatDateTime(request.routedAt!)}` : "—"}</dd>
+            <dt className="text-muted">Assigned To</dt>
+            <dd className="text-foreground">{request.assignedTo ? `${request.assignedTo.name} — ${formatDateTime(request.assignedAt!)}` : "—"}</dd>
+            <dt className="text-muted">Delivered By</dt>
+            <dd className="text-foreground">{request.deliveredBy ? `${request.deliveredBy.name} — ${formatDateTime(request.deliveredAt!)}` : "—"}</dd>
+            <dt className="text-muted">Received By</dt>
+            <dd className="text-foreground">{request.receivedQuantity > 0 ? request.requestedBy.name : "—"}</dd>
             <dt className="text-muted">Completed</dt>
             <dd className="text-foreground">{request.completedAt ? formatDateTime(request.completedAt) : "—"}</dd>
           </dl>
         </Panel>
       </div>
-
-      {(request.purchaseReferences.length > 0 || request.materialReceipts.length > 0) && (
-        <Panel title="External Replenishment (Purchase Reference / GRN)">
-          <div className="space-y-2 text-sm">
-            {request.purchaseReferences.map((po) => (
-              <div key={po.id} className="flex items-center justify-between rounded-md border border-border-soft bg-surface-raised px-3 py-2">
-                <span className="text-foreground">{po.poNumber} — {po.supplier.name} — {formatNumber(po.orderedQuantity)} {request.material.uom} ordered</span>
-                <span className="text-xs text-muted">{po.status.replace("_", " ")}</span>
-              </div>
-            ))}
-            {request.materialReceipts.map((grn) => (
-              <div key={grn.id} className="flex items-center justify-between rounded-md border border-border-soft bg-surface-raised px-3 py-2">
-                <Link href={`/receipts/${grn.id}`} className="text-accent hover:underline">{grn.grnNumber}</Link>
-                <span className="text-xs text-muted">Accepted {formatNumber(grn.acceptedQuantity)} {request.material.uom} &middot; {grn.status}</span>
-              </div>
-            ))}
-          </div>
-        </Panel>
-      )}
 
       <Panel title="Timeline">
         {request.events.length === 0 ? (
@@ -175,7 +179,7 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
 
       <Panel title="Related Stock Movements">
         {relatedTransactions.length === 0 ? (
-          <EmptyState title="No stock movements yet" body="Movements appear here once stock is allocated, issued, or received against this request." />
+          <EmptyState title="No stock movements yet" body="Movements appear here once delivery starts and receipt is confirmed against this request." />
         ) : (
           <div className="overflow-x-auto scrollbar-thin">
             <table className="w-full border-collapse">

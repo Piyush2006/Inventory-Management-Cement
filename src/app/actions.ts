@@ -1,17 +1,19 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { postMovement, postAdjustment, postTransfer, postPacking } from "@/lib/inventory/ledger";
-import { postProduction } from "@/lib/inventory/production";
+import { postMovement, postAdjustment, postTransfer } from "@/lib/inventory/ledger";
 import { recordPhysicalCount, postCountAdjustment } from "@/lib/inventory/reconciliation";
+import { changeQualityStatus, reconcileQualityBalances } from "@/lib/inventory/quality";
 import {
   createStockRequest,
   acceptStockRequest,
   rejectStockRequest,
-  cancelStockRequest,
-  allocateStock,
-  issueStock,
+  routeToSupervisor,
+  assignOperator,
+  startDelivery,
+  markDelivered,
   confirmReceipt,
+  markNotReceived,
 } from "@/lib/inventory/requests";
 import {
   resolveSupplier,
@@ -23,7 +25,7 @@ import {
 } from "@/lib/inventory/procurement";
 import { getCurrentUser, setCurrentUser, requireRole } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { ADJUSTMENT_ROLES, FULFILMENT_ROLES, MASTER_DATA_ROLES, type TransactionType } from "@/lib/domain/enums";
+import { ADJUSTMENT_ROLES, STOCK_OPS_ROLES, MASTER_DATA_ROLES, type TransactionType, type QualityStatus } from "@/lib/domain/enums";
 
 function fail(message: string) {
   return { ok: false as const, error: message };
@@ -36,17 +38,16 @@ function revalidateInventoryViews() {
   revalidatePath("/");
   revalidatePath("/inventory");
   revalidatePath("/ledger");
-  revalidatePath("/production");
 }
 
 // ---------------------------------------------------------------------------
-// Record Movement
+// Stock Operations — Receive Material / Consume / Transfer / Adjustment
 // ---------------------------------------------------------------------------
 
 export async function actionRecordMovement(formData: FormData) {
   try {
     const user = await getCurrentUser();
-    requireRole(user, FULFILMENT_ROLES);
+    requireRole(user, STOCK_OPS_ROLES);
     const transactionType = String(formData.get("transactionType")) as TransactionType;
     const materialId = String(formData.get("materialId"));
     const quantity = Number(formData.get("quantity"));
@@ -54,22 +55,31 @@ export async function actionRecordMovement(formData: FormData) {
     if (!materialId || Number.isNaN(quantity) || quantity <= 0) return fail("Missing required fields");
 
     const material = await prisma.material.findUniqueOrThrow({ where: { id: materialId } });
+    if (!material.active) return fail(`${material.name} is not active`);
 
     if (transactionType === "TRANSFER") {
       const sourceLocationId = String(formData.get("sourceLocationId"));
       const destinationLocationId = String(formData.get("destinationLocationId"));
       if (!sourceLocationId || !destinationLocationId) return fail("Source and destination locations are required");
+      const [sourceLocation, destinationLocation] = await Promise.all([
+        prisma.location.findUniqueOrThrow({ where: { id: sourceLocationId } }),
+        prisma.location.findUniqueOrThrow({ where: { id: destinationLocationId } }),
+      ]);
+      if (!sourceLocation.active || !destinationLocation.active) return fail("Source and destination locations must both be active");
       await postTransfer({ materialId, quantity, uom: material.uom, sourceLocationId, destinationLocationId, reference });
-    } else if (transactionType === "RECEIPT" || transactionType === "DISPATCH" || transactionType === "CONSUMPTION") {
+    } else if (transactionType === "CONSUMPTION") {
       const locationId = String(formData.get("locationId"));
       if (!locationId) return fail("A location is required");
+      const location = await prisma.location.findUniqueOrThrow({ where: { id: locationId } });
+      if (!location.active) return fail(`${location.name} is not active`);
       const processName = formData.get("processName") ? String(formData.get("processName")) : undefined;
       await postMovement({ materialId, transactionType, quantity, uom: material.uom, locationId, reference, processName });
     } else {
-      return fail(`${transactionType} is not handled by Record Movement — use the dedicated screen`);
+      return fail(`${transactionType} is not handled by this form`);
     }
 
     revalidateInventoryViews();
+    revalidatePath("/movements");
     revalidatePath("/requests");
     return ok();
   } catch (e) {
@@ -80,7 +90,7 @@ export async function actionRecordMovement(formData: FormData) {
 export async function actionRecordPhysicalCount(formData: FormData) {
   try {
     const user = await getCurrentUser();
-    requireRole(user, FULFILMENT_ROLES);
+    requireRole(user, STOCK_OPS_ROLES);
     const locationId = String(formData.get("locationId"));
     const materialId = String(formData.get("materialId"));
     const countedQuantity = Number(formData.get("countedQuantity"));
@@ -97,15 +107,18 @@ export async function actionRecordPhysicalCount(formData: FormData) {
 }
 
 /**
- * Combines "record the count" and "post the adjustment" into one user action, matching
- * the spec's framing of Adjustment/Physical Count as a single feature: show book vs
- * counted stock and variance, then require a reason and confirmation before posting. A
- * reason is only required (and only an adjustment posted) when there's a nonzero variance.
+ * Combines "record the count" and "post the adjustment" into one user action: show book
+ * vs counted stock and variance, then require a reason and confirmation before posting.
+ * A reason is only required (and only an adjustment posted) when there's a nonzero
+ * variance. Posting still requires ADJUSTMENT_ROLES (Inventory Manager/Admin) — but a
+ * variance from anyone else now records the count and leaves it pending approval instead
+ * of failing outright, so a Store Operator can complete their count and hand it off. See
+ * the "Pending Physical Counts" panel (actionPostCountAdjustment) for the approval step.
  */
 export async function actionRecordCountAndAdjust(formData: FormData) {
   try {
     const user = await getCurrentUser();
-    requireRole(user, FULFILMENT_ROLES);
+    requireRole(user, STOCK_OPS_ROLES);
     const locationId = String(formData.get("locationId"));
     const materialId = String(formData.get("materialId"));
     const countedQuantity = Number(formData.get("countedQuantity"));
@@ -116,13 +129,16 @@ export async function actionRecordCountAndAdjust(formData: FormData) {
 
     const { count, preview } = await recordPhysicalCount({ locationId, materialId, countedQuantity, countedBy, note });
     const hasVariance = Math.abs(preview.varianceQty) > 1e-9;
-    if (hasVariance) {
+    const canApprove = ADJUSTMENT_ROLES.includes(user.role as (typeof ADJUSTMENT_ROLES)[number]);
+    let adjusted = false;
+    if (hasVariance && canApprove) {
       if (!reason.trim()) return fail("A reason is required to post an adjustment");
-      requireRole(user, ADJUSTMENT_ROLES);
       await postCountAdjustment({ physicalCountId: count.id, reason });
+      adjusted = true;
     }
     revalidateInventoryViews();
-    return ok({ varianceQty: preview.varianceQty, adjusted: hasVariance });
+    revalidatePath("/movements");
+    return ok({ varianceQty: preview.varianceQty, adjusted, pendingApproval: hasVariance && !canApprove, tolerancePct: preview.tolerancePct, withinTolerance: preview.withinTolerance });
   } catch (e) {
     return fail(e instanceof Error ? e.message : "Failed to record count");
   }
@@ -153,8 +169,16 @@ export async function actionPostAdjustment(formData: FormData) {
 
     const user = await getCurrentUser();
     requireRole(user, ADJUSTMENT_ROLES);
-    const material = await prisma.material.findUniqueOrThrow({ where: { id: materialId } });
+    const [material, location] = await Promise.all([
+      prisma.material.findUniqueOrThrow({ where: { id: materialId } }),
+      prisma.location.findUniqueOrThrow({ where: { id: locationId } }),
+    ]);
+    if (!material.active) return fail(`${material.name} is not active`);
+    if (!location.active) return fail(`${location.name} is not active`);
     await postAdjustment({ materialId, locationId, quantity, uom: material.uom, reason });
+    // postAdjustment always bypasses the negative-balance guard — if this location had QC
+    // Hold/Blocked stock, a large enough negative adjustment can drop On Hand below it.
+    await reconcileQualityBalances(materialId, locationId);
     revalidateInventoryViews();
     return ok();
   } catch (e) {
@@ -162,52 +186,31 @@ export async function actionPostAdjustment(formData: FormData) {
   }
 }
 
-export async function actionPostPacking(formData: FormData) {
+/** Release (-> Unrestricted), Hold, or Block a quantity of a material at a location. Inventory Manager/Admin only — matches the spec's "other roles: view only". */
+export async function actionChangeQualityStatus(formData: FormData) {
   try {
     const user = await getCurrentUser();
-    requireRole(user, FULFILMENT_ROLES);
-    const bulkMaterialId = String(formData.get("bulkMaterialId"));
-    const bulkLocationId = String(formData.get("bulkLocationId"));
-    const bulkQuantity = Number(formData.get("bulkQuantity"));
-    const bagMaterialId = String(formData.get("bagMaterialId"));
-    const bagLocationId = String(formData.get("bagLocationId"));
-    const baggedLocationId = String(formData.get("baggedLocationId"));
-    if (!bulkMaterialId || !bulkLocationId || !bagMaterialId || !bagLocationId || !baggedLocationId || Number.isNaN(bulkQuantity) || bulkQuantity <= 0) {
-      return fail("Missing required fields");
-    }
-    await postPacking({ bulkMaterialId, bulkLocationId, bulkQuantity, bagMaterialId, bagLocationId, baggedMaterialId: bulkMaterialId, baggedLocationId });
+    requireRole(user, ADJUSTMENT_ROLES);
+    const materialId = String(formData.get("materialId"));
+    const locationId = String(formData.get("locationId"));
+    const quantity = Number(formData.get("quantity"));
+    const fromStatus = String(formData.get("fromStatus")) as QualityStatus;
+    const toStatus = String(formData.get("toStatus")) as QualityStatus;
+    const reason = formData.get("reason") ? String(formData.get("reason")) : "";
+    if (!materialId || !locationId || Number.isNaN(quantity) || quantity <= 0 || !fromStatus || !toStatus) return fail("Missing required fields");
+    if (toStatus !== "UNRESTRICTED" && !reason.trim()) return fail("A reason is required to hold or block stock");
+
+    await changeQualityStatus({ materialId, locationId, quantity, fromStatus, toStatus, userId: user.id, reason: reason || undefined });
     revalidateInventoryViews();
+    revalidatePath(`/inventory/${materialId}`);
     return ok();
   } catch (e) {
-    return fail(e instanceof Error ? e.message : "Failed to post packing run");
+    return fail(e instanceof Error ? e.message : "Failed to change quality status");
   }
 }
 
 // ---------------------------------------------------------------------------
-// Production
-// ---------------------------------------------------------------------------
-
-export async function actionRecordProduction(formData: FormData) {
-  try {
-    const user = await getCurrentUser();
-    requireRole(user, FULFILMENT_ROLES);
-    const outputMaterialId = String(formData.get("outputMaterialId"));
-    const outputLocationId = String(formData.get("outputLocationId"));
-    const quantity = Number(formData.get("quantity"));
-    const processName = formData.get("processName") ? String(formData.get("processName")) : undefined;
-    const note = formData.get("note") ? String(formData.get("note")) : undefined;
-    if (!outputMaterialId || !outputLocationId || Number.isNaN(quantity) || quantity <= 0) return fail("Missing required fields");
-
-    const result = await postProduction({ outputMaterialId, outputLocationId, quantity, processName, note });
-    revalidateInventoryViews();
-    return ok({ consumedInputs: result.consumedInputs });
-  } catch (e) {
-    return fail(e instanceof Error ? e.message : "Failed to record production");
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Stock Requests — full lifecycle
+// Requests — full role-based lifecycle
 // ---------------------------------------------------------------------------
 
 function revalidateRequestViews() {
@@ -248,18 +251,6 @@ export async function actionCreateStockRequest(formData: FormData) {
   }
 }
 
-export async function actionCancelStockRequest(formData: FormData) {
-  try {
-    const id = String(formData.get("id"));
-    const user = await getCurrentUser();
-    await cancelStockRequest(id, user.id);
-    revalidateRequestViews();
-    return ok();
-  } catch (e) {
-    return fail(e instanceof Error ? e.message : "Failed to cancel request");
-  }
-}
-
 export async function actionAcceptStockRequest(formData: FormData) {
   try {
     const id = String(formData.get("id"));
@@ -286,31 +277,56 @@ export async function actionRejectStockRequest(formData: FormData) {
   }
 }
 
-export async function actionAllocateStock(formData: FormData) {
+export async function actionRouteToSupervisor(formData: FormData) {
   try {
     const id = String(formData.get("id"));
-    const quantity = Number(formData.get("quantity"));
-    if (!id || Number.isNaN(quantity) || quantity <= 0) return fail("Missing required fields");
+    const supervisorUserId = String(formData.get("supervisorUserId"));
+    if (!id || !supervisorUserId) return fail("Choose a Store Supervisor to route to");
     const user = await getCurrentUser();
-    await allocateStock(id, quantity, user.id);
+    await routeToSupervisor(id, supervisorUserId, user.id);
     revalidateRequestViews();
     return ok();
   } catch (e) {
-    return fail(e instanceof Error ? e.message : "Failed to allocate stock");
+    return fail(e instanceof Error ? e.message : "Failed to route request");
   }
 }
 
-export async function actionIssueStock(formData: FormData) {
+export async function actionAssignOperator(formData: FormData) {
   try {
     const id = String(formData.get("id"));
-    const quantity = Number(formData.get("quantity"));
-    if (!id || Number.isNaN(quantity) || quantity <= 0) return fail("Missing required fields");
+    const operatorUserId = String(formData.get("operatorUserId"));
+    if (!id || !operatorUserId) return fail("Choose an operator to assign");
     const user = await getCurrentUser();
-    await issueStock(id, quantity, user.id);
+    await assignOperator(id, operatorUserId, user.id);
     revalidateRequestViews();
     return ok();
   } catch (e) {
-    return fail(e instanceof Error ? e.message : "Failed to issue stock");
+    return fail(e instanceof Error ? e.message : "Failed to assign operator");
+  }
+}
+
+export async function actionStartDelivery(formData: FormData) {
+  try {
+    const id = String(formData.get("id"));
+    const user = await getCurrentUser();
+    await startDelivery(id, user.id);
+    revalidateRequestViews();
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to start delivery");
+  }
+}
+
+export async function actionMarkDelivered(formData: FormData) {
+  try {
+    const id = String(formData.get("id"));
+    const deliveryNote = formData.get("deliveryNote") ? String(formData.get("deliveryNote")) : undefined;
+    const user = await getCurrentUser();
+    await markDelivered(id, user.id, deliveryNote);
+    revalidateRequestViews();
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to mark delivered");
   }
 }
 
@@ -318,9 +334,10 @@ export async function actionConfirmReceipt(formData: FormData) {
   try {
     const id = String(formData.get("id"));
     const quantity = Number(formData.get("quantity"));
+    const note = formData.get("note") ? String(formData.get("note")) : undefined;
     if (!id || Number.isNaN(quantity) || quantity <= 0) return fail("Missing required fields");
     const user = await getCurrentUser();
-    await confirmReceipt(id, quantity, user.id);
+    await confirmReceipt(id, quantity, user.id, note);
     revalidateRequestViews();
     return ok();
   } catch (e) {
@@ -328,8 +345,22 @@ export async function actionConfirmReceipt(formData: FormData) {
   }
 }
 
+export async function actionMarkNotReceived(formData: FormData) {
+  try {
+    const id = String(formData.get("id"));
+    const reason = String(formData.get("reason") || "");
+    if (!reason.trim()) return fail("A reason is required");
+    const user = await getCurrentUser();
+    await markNotReceived(id, user.id, reason);
+    revalidateRequestViews();
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to record not received");
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Master data — Materials & Locations
+// Locations & Materials
 // ---------------------------------------------------------------------------
 
 export async function actionSaveMaterial(formData: FormData) {
@@ -344,19 +375,17 @@ export async function actionSaveMaterial(formData: FormData) {
     const minStock = formData.get("minStock") ? Number(formData.get("minStock")) : null;
     const safetyStock = formData.get("safetyStock") ? Number(formData.get("safetyStock")) : null;
     const defaultLocationId = formData.get("defaultLocationId") ? String(formData.get("defaultLocationId")) : null;
-    const productGrade = formData.get("productGrade") ? String(formData.get("productGrade")) : null;
-    const bagWeightKg = formData.get("bagWeightKg") ? Number(formData.get("bagWeightKg")) : null;
     const active = formData.get("active") === "on" || formData.get("active") === "true";
 
     if (!materialCode || !name || !category || !uom) return fail("Code, name, category, and UOM are required");
 
-    const data = { materialCode, name, category, uom, minStock, safetyStock, defaultLocationId, productGrade, bagWeightKg, active };
+    const data = { materialCode, name, category, uom, minStock, safetyStock, defaultLocationId, active };
     if (id) {
       await prisma.material.update({ where: { id }, data });
     } else {
       await prisma.material.create({ data });
     }
-    revalidatePath("/master-data");
+    revalidatePath("/materials");
     revalidatePath("/inventory");
     revalidatePath("/");
     return ok();
@@ -372,7 +401,7 @@ export async function actionDeactivateMaterial(formData: FormData) {
     const id = String(formData.get("id"));
     const active = formData.get("active") === "true";
     await prisma.material.update({ where: { id }, data: { active } });
-    revalidatePath("/master-data");
+    revalidatePath("/materials");
     revalidatePath("/inventory");
     return ok();
   } catch (e) {
@@ -397,7 +426,8 @@ export async function actionSaveLocation(formData: FormData) {
     } else {
       await prisma.location.create({ data: { name, type, capacity, active } });
     }
-    revalidatePath("/master-data");
+    revalidatePath("/locations");
+    revalidatePath("/materials");
     revalidatePath("/inventory");
     return ok();
   } catch (e) {
@@ -414,7 +444,8 @@ export async function actionDeactivateLocation(formData: FormData) {
     const balance = await prisma.inventoryBalance.findFirst({ where: { locationId: id, quantity: { gt: 1e-6 } } });
     if (!active && balance) return fail("Cannot deactivate a location that still holds stock");
     await prisma.location.update({ where: { id }, data: { active } });
-    revalidatePath("/master-data");
+    revalidatePath("/locations");
+    revalidatePath("/materials");
     return ok();
   } catch (e) {
     return fail(e instanceof Error ? e.message : "Failed to update location");
@@ -422,13 +453,13 @@ export async function actionDeactivateLocation(formData: FormData) {
 }
 
 // ---------------------------------------------------------------------------
-// Procurement — Purchase References & Material Receipts (GRN)
+// Receive Material — Purchase/Source References & GRN
 // ---------------------------------------------------------------------------
 
 function revalidateProcurementViews() {
   revalidateInventoryViews();
   revalidatePath("/receipts");
-  revalidatePath("/requests");
+  revalidatePath("/movements");
 }
 
 async function resolveSupplierFromForm(formData: FormData) {
@@ -446,18 +477,16 @@ async function resolveSupplierFromForm(formData: FormData) {
 export async function actionCreatePurchaseReference(formData: FormData) {
   try {
     const user = await getCurrentUser();
-    requireRole(user, FULFILMENT_ROLES);
+    requireRole(user, STOCK_OPS_ROLES);
     const supplier = await resolveSupplierFromForm(formData);
     const materialId = String(formData.get("materialId"));
     const orderedQuantity = Number(formData.get("orderedQuantity"));
     const expectedDeliveryDate = formData.get("expectedDeliveryDate") ? new Date(String(formData.get("expectedDeliveryDate"))) : undefined;
     const note = formData.get("note") ? String(formData.get("note")) : undefined;
-    const stockRequestId = formData.get("stockRequestId") ? String(formData.get("stockRequestId")) : undefined;
     if (!materialId || Number.isNaN(orderedQuantity)) return fail("Missing required fields");
 
-    const po = await createPurchaseReference({ supplierId: supplier.id, materialId, orderedQuantity, expectedDeliveryDate, note, stockRequestId });
+    const po = await createPurchaseReference({ supplierId: supplier.id, materialId, orderedQuantity, expectedDeliveryDate, note });
     revalidatePath("/receipts");
-    revalidatePath("/requests");
     return ok({ purchaseReferenceId: po.id, poNumber: po.poNumber });
   } catch (e) {
     return fail(e instanceof Error ? e.message : "Failed to create purchase reference");
@@ -473,7 +502,7 @@ function receiptInputFromForm(formData: FormData) {
   const rejectedRaw = formData.get("rejectedQuantity");
   const rejectedQuantity = rejectedRaw && String(rejectedRaw).trim() !== "" ? Number(rejectedRaw) : undefined;
   const destinationLocationId = String(formData.get("destinationLocationId"));
-  const stockRequestId = formData.get("stockRequestId") ? String(formData.get("stockRequestId")) : undefined;
+  const qualityStatus = (formData.get("qualityStatus") ? String(formData.get("qualityStatus")) : "UNRESTRICTED") as QualityStatus;
   const allowOverReceipt = formData.get("allowOverReceipt") === "on" || formData.get("allowOverReceipt") === "true";
   const invoiceDate = formData.get("invoiceDate") ? new Date(String(formData.get("invoiceDate"))) : undefined;
   const invoiceAmount = formData.get("invoiceAmount") ? Number(formData.get("invoiceAmount")) : undefined;
@@ -486,6 +515,7 @@ function receiptInputFromForm(formData: FormData) {
     acceptedQuantity,
     rejectedQuantity,
     destinationLocationId,
+    qualityStatus,
     batchLot: formData.get("batchLot") ? String(formData.get("batchLot")) : undefined,
     invoiceNumber: formData.get("invoiceNumber") ? String(formData.get("invoiceNumber")) : undefined,
     invoiceDate,
@@ -495,7 +525,6 @@ function receiptInputFromForm(formData: FormData) {
     vehicleReference: formData.get("vehicleReference") ? String(formData.get("vehicleReference")) : undefined,
     truckNumber: formData.get("truckNumber") ? String(formData.get("truckNumber")) : undefined,
     notes: formData.get("notes") ? String(formData.get("notes")) : undefined,
-    stockRequestId,
     allowOverReceipt,
   };
 }
@@ -503,8 +532,8 @@ function receiptInputFromForm(formData: FormData) {
 /** Creates a Material Receipt / GRN — as DRAFT, or DRAFT-then-immediately-POSTED depending on `mode`. */
 export async function actionCreateMaterialReceipt(formData: FormData) {
   try {
-    const actingUser = await getCurrentUser();
-    requireRole(actingUser, FULFILMENT_ROLES);
+    const user = await getCurrentUser();
+    requireRole(user, STOCK_OPS_ROLES);
     const supplier = await resolveSupplierFromForm(formData);
     const mode = String(formData.get("mode") || "post"); // "draft" | "post"
     const input = receiptInputFromForm(formData);
@@ -515,7 +544,7 @@ export async function actionCreateMaterialReceipt(formData: FormData) {
     const receipt =
       mode === "draft"
         ? await createMaterialReceipt({ ...input, supplierId: supplier.id })
-        : await createAndPostMaterialReceipt({ ...input, supplierId: supplier.id }, actingUser.id);
+        : await createAndPostMaterialReceipt({ ...input, supplierId: supplier.id }, user.id);
 
     revalidateProcurementViews();
     return ok({ receiptId: receipt.id, grnNumber: receipt.grnNumber, status: receipt.status });
@@ -526,10 +555,10 @@ export async function actionCreateMaterialReceipt(formData: FormData) {
 
 export async function actionPostMaterialReceipt(formData: FormData) {
   try {
-    const actingUser = await getCurrentUser();
-    requireRole(actingUser, FULFILMENT_ROLES);
+    const user = await getCurrentUser();
+    requireRole(user, STOCK_OPS_ROLES);
     const id = String(formData.get("id"));
-    await postMaterialReceipt(id, actingUser.id);
+    await postMaterialReceipt(id, user.id);
     revalidateProcurementViews();
     return ok();
   } catch (e) {
@@ -540,7 +569,7 @@ export async function actionPostMaterialReceipt(formData: FormData) {
 export async function actionCancelMaterialReceipt(formData: FormData) {
   try {
     const user = await getCurrentUser();
-    requireRole(user, FULFILMENT_ROLES);
+    requireRole(user, STOCK_OPS_ROLES);
     const id = String(formData.get("id"));
     const reason = String(formData.get("reason") || "");
     if (!reason.trim()) return fail("A reason is required to cancel a receipt");

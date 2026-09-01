@@ -19,7 +19,7 @@ datasource db {
 model Location {
   id       String  @id @default(cuid())
   name     String  @unique
-  type     String // STOCKPILE | YARD | BUNKER | SILO | STORE | WAREHOUSE
+  type     String // STOCKPILE | YARD | BUNKER | SILO | STORE | WAREHOUSE | PRODUCTION_AREA
   capacity Float?
   active   Boolean @default(true)
 
@@ -31,6 +31,8 @@ model Location {
   materialReceipts     MaterialReceipt[]
   requestsFrom         StockRequest[]         @relation("RequestFromLocation")
   requestsTo           StockRequest[]         @relation("RequestToLocation")
+  qualityBalances      QualityBalance[]
+  qualityStatusEvents  QualityStatusEvent[]
 }
 
 // ---------------------------------------------------------------------------
@@ -42,28 +44,73 @@ model Material {
   materialCode      String   @unique
   name              String
   category          String // RAW_MATERIAL | FUEL | ADDITIVE | INTERMEDIATE | FINISHED_GOODS | PACKING
-  uom               String // MT | Nos
-  productGrade      String? // GP | GB | HE (finished goods only)
-  bagWeightKg       Float? // set on bagged finished-goods materials for packing conversion
+  uom               String // material-specific, e.g. MT | Nos
   minStock          Float?
   safetyStock       Float?
   defaultLocationId String?
+  // Physical Count tolerance band, e.g. 3 = ±3%. Falls back to DEFAULT_TOLERANCE_PCT
+  // (reconciliation.ts) when unset — most materials won't need a per-material override.
+  tolerancePct      Float?
   active            Boolean  @default(true)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
   defaultLocation Location? @relation("MaterialDefaultLocation", fields: [defaultLocationId], references: [id])
 
-  balances           InventoryBalance[]
-  transactions       InventoryTransaction[]
-  physicalCounts     PhysicalCount[]
-  stockRequests      StockRequest[]
-  outputCoefficients ConsumptionCoefficient[] @relation("CoeffOutputMaterial")
-  inputCoefficients  ConsumptionCoefficient[] @relation("CoeffInputMaterial")
+  balances         InventoryBalance[]
+  transactions     InventoryTransaction[]
+  physicalCounts   PhysicalCount[]
+  stockRequests    StockRequest[]
   purchaseReferences PurchaseReference[]
-  materialReceipts   MaterialReceipt[]
+  materialReceipts MaterialReceipt[]
+  qualityBalances     QualityBalance[]
+  qualityStatusEvents QualityStatusEvent[]
 
   @@index([category])
+}
+
+// ---------------------------------------------------------------------------
+// Quality Hold / Release — a material physically On Hand (InventoryBalance,
+// unchanged) can additionally be split into QC_HOLD / BLOCKED sub-buckets that
+// are excluded from what's usable. UNRESTRICTED is never stored: it's always
+// derived as OnHand − QC_HOLD − BLOCKED for a given (material, location). This
+// mirrors the InventoryTransaction (ledger) / InventoryBalance (materialized
+// cache) split for the same reason — O(1) reads without re-summing events.
+// ---------------------------------------------------------------------------
+
+model QualityBalance {
+  id         String   @id @default(cuid())
+  materialId String
+  locationId String
+  status     String // QC_HOLD | BLOCKED
+  quantity   Float    @default(0)
+  updatedAt  DateTime @updatedAt
+
+  material Material @relation(fields: [materialId], references: [id])
+  location Location @relation(fields: [locationId], references: [id])
+
+  @@unique([materialId, locationId, status])
+}
+
+// The audit trail for every quality reclassification (GRN-time hold, manual
+// Release/Hold/Block, and automatic reconciliation). userId is a plain string,
+// matching InventoryTransaction.userId's existing pattern, not a relation.
+model QualityStatusEvent {
+  id         String   @id @default(cuid())
+  materialId String
+  locationId String
+  quantity   Float
+  fromStatus String // UNRESTRICTED | QC_HOLD | BLOCKED
+  toStatus   String // UNRESTRICTED | QC_HOLD | BLOCKED
+  userId     String
+  reason     String?
+  reference  String?
+  timestamp  DateTime @default(now())
+
+  material Material @relation(fields: [materialId], references: [id])
+  location Location @relation(fields: [locationId], references: [id])
+
+  @@index([materialId, locationId])
 }
 
 // ---------------------------------------------------------------------------
@@ -74,13 +121,13 @@ model InventoryTransaction {
   id                    String   @id @default(cuid())
   timestamp             DateTime
   materialId            String
-  transactionType       String // RECEIPT | CONSUMPTION | PRODUCTION | TRANSFER | DISPATCH | ADJUSTMENT | PACKING | OPENING_BALANCE
+  transactionType       String // RECEIPT | CONSUMPTION | TRANSFER | TRANSFER_OUT | TRANSFER_IN | ADJUSTMENT | OPENING_BALANCE
   quantity              Float // positive magnitude; direction implied by which location field is set
   uom                   String
   sourceLocationId      String?
   destinationLocationId String?
-  reference             String? // supplier/customer/request/GRN reference, free text
-  processName           String? // production unit/process, free text (e.g. "Kiln", "Cement Mill")
+  reference             String? // supplier/request/GRN reference, free text
+  processName           String? // consumption area/process, free text (e.g. "Cement Mill 1")
   reason                String? // mandatory for ADJUSTMENT
   batchLot              String? // set on GRN-sourced receipts where traceability matters
   userId                String?
@@ -105,22 +152,6 @@ model InventoryBalance {
   location Location @relation(fields: [locationId], references: [id])
 
   @@unique([materialId, locationId])
-}
-
-// Configurable recipe: how much inputMaterial is consumed per unit of outputMaterial
-// produced (e.g. Coal per MT Clinker, Clinker per MT Cement GP).
-model ConsumptionCoefficient {
-  id               String  @id @default(cuid())
-  outputMaterialId String
-  inputMaterialId  String
-  rate             Float // input quantity per 1 unit of output quantity
-  active           Boolean @default(true)
-  notes            String?
-
-  outputMaterial Material @relation("CoeffOutputMaterial", fields: [outputMaterialId], references: [id])
-  inputMaterial  Material @relation("CoeffInputMaterial", fields: [inputMaterialId], references: [id])
-
-  @@unique([outputMaterialId, inputMaterialId])
 }
 
 // ---------------------------------------------------------------------------
@@ -153,17 +184,23 @@ model PhysicalCount {
 model User {
   id     String  @id @default(cuid())
   name   String
-  role   String // REQUESTER | STORE_OPERATOR | INVENTORY_MANAGER | ADMIN
+  role   String // REQUESTER | STORE_SUPERVISOR | STORE_OPERATOR | INVENTORY_MANAGER | ADMIN
   active Boolean @default(true)
 
-  requestsCreated  StockRequest[] @relation("RequestedBy")
-  requestsAccepted StockRequest[] @relation("AcceptedBy")
-  requestsRejected StockRequest[] @relation("RejectedBy")
-  events           RequestEvent[]
+  requestsCreated    StockRequest[] @relation("RequestedBy")
+  requestsAccepted   StockRequest[] @relation("AcceptedBy")
+  requestsRejected   StockRequest[] @relation("RejectedBy")
+  requestsRoutedTo   StockRequest[] @relation("RoutedTo")
+  requestsRoutedBy   StockRequest[] @relation("RoutedBy")
+  requestsAssignedTo StockRequest[] @relation("AssignedTo")
+  requestsAssignedBy StockRequest[] @relation("AssignedBy")
+  requestsDelivered  StockRequest[] @relation("DeliveredBy")
+  events             RequestEvent[]
 }
 
 // ---------------------------------------------------------------------------
-// Stock Requests — full lifecycle from raise to physical receipt & completion
+// Requests — the core workflow. One request moves through several roles;
+// the SAME Request ID and record stays attached from creation to completion.
 // ---------------------------------------------------------------------------
 
 model StockRequest {
@@ -171,16 +208,15 @@ model StockRequest {
   requestNumber     String   @unique
   materialId        String
   quantityRequested Float
-  allocatedQuantity Float    @default(0) // reserved-but-not-yet-issued, cumulative across rounds
-  issuedQuantity    Float    @default(0) // moved out of source, cumulative
-  receivedQuantity  Float    @default(0) // confirmed at destination, cumulative
+  deliveredQuantity Float    @default(0) // cumulative moved out of source into the in-transit bucket, across delivery rounds
+  receivedQuantity  Float    @default(0) // cumulative confirmed received at destination, across rounds
   requiredByDate    DateTime
   priority          String   @default("NORMAL") // NORMAL | URGENT
-  status            String   @default("PENDING")
-  // PENDING | ACCEPTED | REJECTED | ALLOCATED | IN_TRANSIT | PARTIALLY_RECEIVED | COMPLETED | CANCELLED
+  status            String   @default("NEW_REQUEST")
+  // NEW_REQUEST | ACCEPTED | REJECTED | ASSIGNED | IN_TRANSIT | DELIVERED | NOT_RECEIVED | PARTIALLY_RECEIVED | COMPLETED
   reason            String? // why the material is needed
   note              String?
-  fromLocationId    String // captured at creation per spec; only actually consumed by allocate/issue — ignored by the external GRN fulfilment path
+  fromLocationId    String
   toLocationId      String
 
   requestedByUserId String
@@ -190,29 +226,51 @@ model StockRequest {
   rejectedByUserId  String?
   rejectedAt        DateTime?
   rejectionReason   String?
-  completedAt       DateTime?
+
+  // Set by the Inventory Manager to hand an accepted request to one specific Store
+  // Supervisor — that supervisor (and only that one) can then assign an operator below.
+  // Persists across re-assignment rounds unless the Inventory Manager re-routes it.
+  routedToUserId String?
+  routedByUserId String?
+  routedAt       DateTime?
+
+  assignedToUserId String? // the specific Store/Delivery Operator responsible for this round
+  assignedByUserId String?
+  assignedAt       DateTime?
+
+  deliveredByUserId String?
+  deliveredAt        DateTime?
+  deliveryNote        String?
+
+  notReceivedReason String?
+  notReceivedAt     DateTime?
+
+  completedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  material     Material  @relation(fields: [materialId], references: [id])
+  material     Material @relation(fields: [materialId], references: [id])
   fromLocation Location @relation("RequestFromLocation", fields: [fromLocationId], references: [id])
-  toLocation   Location  @relation("RequestToLocation", fields: [toLocationId], references: [id])
-  requestedBy  User      @relation("RequestedBy", fields: [requestedByUserId], references: [id])
-  acceptedBy   User?     @relation("AcceptedBy", fields: [acceptedByUserId], references: [id])
-  rejectedBy   User?     @relation("RejectedBy", fields: [rejectedByUserId], references: [id])
+  toLocation   Location @relation("RequestToLocation", fields: [toLocationId], references: [id])
+  requestedBy  User     @relation("RequestedBy", fields: [requestedByUserId], references: [id])
+  acceptedBy   User?    @relation("AcceptedBy", fields: [acceptedByUserId], references: [id])
+  rejectedBy   User?    @relation("RejectedBy", fields: [rejectedByUserId], references: [id])
+  routedTo     User?    @relation("RoutedTo", fields: [routedToUserId], references: [id])
+  routedBy     User?    @relation("RoutedBy", fields: [routedByUserId], references: [id])
+  assignedTo   User?    @relation("AssignedTo", fields: [assignedToUserId], references: [id])
+  assignedBy   User?    @relation("AssignedBy", fields: [assignedByUserId], references: [id])
+  deliveredBy  User?    @relation("DeliveredBy", fields: [deliveredByUserId], references: [id])
 
-  reservations       StockReservation[]
-  events             RequestEvent[]
-  purchaseReferences PurchaseReference[]
-  materialReceipts   MaterialReceipt[]
+  reservations StockReservation[]
+  events       RequestEvent[]
 
   @@index([status])
 }
 
-// A soft lock on stock at a location for an accepted-but-not-yet-issued request.
-// Reserved stock is still physically On Hand — it just isn't Available for other
-// requests. Released (not deleted) once issued or if the request is cancelled.
+// A soft lock on stock at a location for a request that's been assigned but not
+// yet physically moved. Reserved stock is still On Hand — it just isn't Available
+// for other requests. Released (not deleted) once delivery starts.
 model StockReservation {
   id             String    @id @default(cuid())
   stockRequestId String
@@ -233,7 +291,7 @@ model StockReservation {
 model RequestEvent {
   id             String   @id @default(cuid())
   stockRequestId String
-  action         String // REQUEST_RAISED | ACCEPTED | REJECTED | ALLOCATED | ISSUED | IN_TRANSIT | RECEIVED | PARTIALLY_RECEIVED | COMPLETED | CANCELLED
+  action         String // REQUEST_CREATED | ACCEPTED | REJECTED | ASSIGNED | IN_TRANSIT | DELIVERED | NOT_RECEIVED | RECEIVED | PARTIALLY_RECEIVED | COMPLETED
   userId         String
   role           String
   quantity       Float?
@@ -249,11 +307,11 @@ model RequestEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Procurement, Material Receipt (GRN) & document tracking
+// Receive Material — supplier, PO/source reference & GRN document tracking.
+// Deliberately minimal — not a full procurement/supplier module. Separate
+// from the internal Request lifecycle above.
 // ---------------------------------------------------------------------------
 
-// Deliberately minimal — not a full supplier management module. Created inline
-// from the Purchase Reference / Material Receipt forms.
 model Supplier {
   id            String   @id @default(cuid())
   name          String
@@ -266,8 +324,8 @@ model Supplier {
   materialReceipts   MaterialReceipt[]
 }
 
-// A tracking-only PO/source reference — not a procurement/accounting system.
-// Status is derived from the cumulative ACCEPTED quantity of its POSTED receipts.
+// A tracking-only PO/source reference. Status is derived from the cumulative
+// ACCEPTED quantity of its POSTED receipts.
 model PurchaseReference {
   id                   String    @id @default(cuid())
   poNumber             String    @unique
@@ -277,14 +335,12 @@ model PurchaseReference {
   expectedDeliveryDate DateTime?
   note                 String?
   status               String    @default("EXPECTED") // EXPECTED | PARTIALLY_RECEIVED | RECEIVED | CANCELLED
-  stockRequestId       String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  supplier     Supplier          @relation(fields: [supplierId], references: [id])
-  material     Material          @relation(fields: [materialId], references: [id])
-  stockRequest StockRequest?     @relation(fields: [stockRequestId], references: [id])
-  receipts     MaterialReceipt[]
+  supplier Supplier          @relation(fields: [supplierId], references: [id])
+  material Material          @relation(fields: [materialId], references: [id])
+  receipts MaterialReceipt[]
 
   @@index([status])
 }
@@ -303,6 +359,9 @@ model MaterialReceipt {
   receivedQuantity        Float
   acceptedQuantity        Float
   rejectedQuantity        Float
+  // Quality status the accepted quantity posts as — UNRESTRICTED unless the receiver
+  // flags it QC_HOLD/BLOCKED at GRN time (see src/lib/inventory/quality.ts).
+  qualityStatus           String    @default("UNRESTRICTED")
   destinationLocationId   String
   batchLot                String?
   invoiceNumber           String?
@@ -317,7 +376,6 @@ model MaterialReceipt {
   postedAt                DateTime?
   inventoryTransactionId  String? // the RECEIPT ledger row this GRN posted (accepted quantity)
   reversalTransactionId   String? // set if a POSTED receipt was later cancelled
-  stockRequestId          String?
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
 
@@ -325,7 +383,6 @@ model MaterialReceipt {
   purchaseReference   PurchaseReference? @relation(fields: [purchaseReferenceId], references: [id])
   material            Material           @relation(fields: [materialId], references: [id])
   destinationLocation Location           @relation(fields: [destinationLocationId], references: [id])
-  stockRequest        StockRequest?      @relation(fields: [stockRequestId], references: [id])
 
   @@index([status])
   @@index([materialId])

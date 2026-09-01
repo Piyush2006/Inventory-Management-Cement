@@ -17,24 +17,26 @@ export function StatusBadge({ status, label }: { status: StockStatus; label?: st
 }
 
 const REQUEST_STYLES: Record<RequestStatus, { fg: string; bg: string }> = {
-  PENDING: { fg: "text-[var(--status-transit)]", bg: "bg-[var(--status-transit-bg)]" },
+  NEW_REQUEST: { fg: "text-[var(--status-transit)]", bg: "bg-[var(--status-transit-bg)]" },
   ACCEPTED: { fg: "text-[var(--status-transit)]", bg: "bg-[var(--status-transit-bg)]" },
   REJECTED: { fg: "text-[var(--status-critical)]", bg: "bg-[var(--status-critical-bg)]" },
-  ALLOCATED: { fg: "text-[var(--status-warning)]", bg: "bg-[var(--status-warning-bg)]" },
+  ASSIGNED: { fg: "text-[var(--status-warning)]", bg: "bg-[var(--status-warning-bg)]" },
   IN_TRANSIT: { fg: "text-[var(--status-excess)]", bg: "bg-[var(--status-excess-bg)]" },
+  DELIVERED: { fg: "text-[var(--status-warning)]", bg: "bg-[var(--status-warning-bg)]" },
+  NOT_RECEIVED: { fg: "text-[var(--status-critical)]", bg: "bg-[var(--status-critical-bg)]" },
   PARTIALLY_RECEIVED: { fg: "text-[var(--status-warning)]", bg: "bg-[var(--status-warning-bg)]" },
   COMPLETED: { fg: "text-[var(--status-healthy)]", bg: "bg-[var(--status-healthy-bg)]" },
-  CANCELLED: { fg: "text-muted", bg: "bg-surface-raised" },
 };
 const REQUEST_LABEL: Record<RequestStatus, string> = {
-  PENDING: "Pending",
+  NEW_REQUEST: "New Request",
   ACCEPTED: "Accepted",
   REJECTED: "Rejected",
-  ALLOCATED: "Allocated",
+  ASSIGNED: "Assigned",
   IN_TRANSIT: "In Transit",
+  DELIVERED: "Delivered",
+  NOT_RECEIVED: "Not Received",
   PARTIALLY_RECEIVED: "Partially Received",
   COMPLETED: "Completed",
-  CANCELLED: "Cancelled",
 };
 
 export function RequestStatusBadge({ status }: { status: RequestStatus }) {

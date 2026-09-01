@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { createStockRequest } from "@/lib/inventory/requests";
 import {
   resolveSupplier,
   createPurchaseReference,
@@ -10,7 +9,7 @@ import {
   ProcurementError,
 } from "@/lib/inventory/procurement";
 import { getBalance } from "./helpers";
-import { makeLocation, makeMaterial, makeUser } from "./helpers";
+import { makeLocation, makeMaterial } from "./helpers";
 import { prisma } from "@/lib/db";
 
 async function setup() {
@@ -81,15 +80,11 @@ describe("material receipt / GRN", () => {
     expect(await getBalance(material.id, location.id)).toBeCloseTo(2500, 6);
   });
 
-  it("rejects a receipt that would exceed the PO's ordered quantity unless over-receipt is explicitly allowed", async () => {
+  it("a receipt exceeding the PO's ordered quantity still succeeds — no validation, ever", async () => {
     const { location, material, supplier } = await setup();
     const po = await createPurchaseReference({ supplierId: supplier.id, materialId: material.id, orderedQuantity: 100 });
 
-    await expect(
-      createMaterialReceipt({ supplierId: supplier.id, purchaseReferenceId: po.id, materialId: material.id, receiptDate: new Date(), receivedQuantity: 150, acceptedQuantity: 150, destinationLocationId: location.id })
-    ).rejects.toThrow(ProcurementError);
-
-    const receipt = await createMaterialReceipt({ supplierId: supplier.id, purchaseReferenceId: po.id, materialId: material.id, receiptDate: new Date(), receivedQuantity: 150, acceptedQuantity: 150, destinationLocationId: location.id, allowOverReceipt: true });
+    const receipt = await createMaterialReceipt({ supplierId: supplier.id, purchaseReferenceId: po.id, materialId: material.id, receiptDate: new Date(), receivedQuantity: 150, acceptedQuantity: 150, destinationLocationId: location.id });
     expect(receipt.status).toBe("DRAFT");
   });
 
@@ -108,29 +103,6 @@ describe("material receipt / GRN", () => {
     expect(originalTx.quantity).toBeCloseTo(500, 6);
     const reversalTx = await prisma.inventoryTransaction.findUniqueOrThrow({ where: { id: cancelled.reversalTransactionId! } });
     expect(reversalTx.transactionType).toBe("ADJUSTMENT");
-  });
-
-  it("fulfils a linked stock request by the accepted quantity when the GRN is posted", async () => {
-    const { location, material, supplier } = await setup();
-    const requester = await makeUser({ role: "REQUESTER" });
-    const storeOperator = await makeUser({ role: "STORE_OPERATOR" });
-    const anotherLocation = await makeLocation();
-    const request = await createStockRequest({
-      materialId: material.id, quantityRequested: 2500, requiredByDate: new Date(),
-      fromLocationId: anotherLocation.id, toLocationId: location.id, requestedByUserId: requester.id,
-    });
-
-    await createAndPostMaterialReceipt(
-      {
-        supplierId: supplier.id, materialId: material.id, receiptDate: new Date(),
-        receivedQuantity: 2000, acceptedQuantity: 1980, destinationLocationId: location.id, stockRequestId: request.id,
-      },
-      storeOperator.id
-    );
-
-    const updated = await prisma.stockRequest.findUniqueOrThrow({ where: { id: request.id } });
-    expect(updated.status).toBe("PARTIALLY_RECEIVED");
-    expect(updated.receivedQuantity).toBeCloseTo(1980, 6); // accepted, not received
   });
 
   it("resolveSupplier reuses an existing supplier by name instead of creating a duplicate", async () => {

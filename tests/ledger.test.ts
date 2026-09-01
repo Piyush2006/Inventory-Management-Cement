@@ -14,22 +14,32 @@ describe("inventory balance", () => {
     expect(await getBalance(material.id, location.id)).toBeCloseTo(600, 6);
   });
 
-  it("rejects a movement that would take a balance negative", async () => {
+  it("a movement that would take a balance negative still posts — no validation, ever", async () => {
     const location = await makeLocation();
     const material = await makeMaterial();
 
     await postMovement({ materialId: material.id, transactionType: "RECEIPT", quantity: 100, uom: "MT", locationId: location.id });
-    await expect(postMovement({ materialId: material.id, transactionType: "CONSUMPTION", quantity: 150, uom: "MT", locationId: location.id })).rejects.toThrow(InventoryError);
-    expect(await getBalance(material.id, location.id)).toBeCloseTo(100, 6);
+    await postMovement({ materialId: material.id, transactionType: "CONSUMPTION", quantity: 150, uom: "MT", locationId: location.id });
+    expect(await getBalance(material.id, location.id)).toBeCloseTo(-50, 6); // negative, posted anyway
   });
 
-  it("rejects a receipt that would exceed a location's capacity", async () => {
+  it("a receipt exceeding a location's capacity still posts — capacity is informational only, never a gate on adding stock", async () => {
     const location = await makeLocation({ capacity: 500 });
     const material = await makeMaterial();
 
     await postMovement({ materialId: material.id, transactionType: "RECEIPT", quantity: 400, uom: "MT", locationId: location.id });
-    await expect(postMovement({ materialId: material.id, transactionType: "RECEIPT", quantity: 200, uom: "MT", locationId: location.id })).rejects.toThrow(InventoryError);
-    expect(await getBalance(material.id, location.id)).toBeCloseTo(400, 6);
+    await postMovement({ materialId: material.id, transactionType: "RECEIPT", quantity: 200, uom: "MT", locationId: location.id });
+    expect(await getBalance(material.id, location.id)).toBeCloseTo(600, 6); // over the 500 capacity, posted anyway
+  });
+
+  it("a transfer into a location exceeding its capacity still posts", async () => {
+    const source = await makeLocation();
+    const destination = await makeLocation({ capacity: 100 });
+    const material = await makeMaterial();
+
+    await postMovement({ materialId: material.id, transactionType: "RECEIPT", quantity: 1000, uom: "MT", locationId: source.id });
+    await postTransfer({ materialId: material.id, quantity: 300, uom: "MT", sourceLocationId: source.id, destinationLocationId: destination.id });
+    expect(await getBalance(material.id, destination.id)).toBeCloseTo(300, 6); // over the 100 capacity, posted anyway
   });
 
   it("allows a signed adjustment with a reason, bypassing the negative/capacity checks", async () => {
@@ -46,6 +56,16 @@ describe("inventory balance", () => {
     const location = await makeLocation();
     const material = await makeMaterial();
     await expect(postAdjustment({ materialId: material.id, locationId: location.id, quantity: 10, uom: "MT", reason: "" })).rejects.toThrow();
+  });
+
+  it("a transfer from a location without enough stock still posts — no validation, ever", async () => {
+    const source = await makeLocation();
+    const destination = await makeLocation();
+    const material = await makeMaterial();
+
+    await postTransfer({ materialId: material.id, quantity: 300, uom: "MT", sourceLocationId: source.id, destinationLocationId: destination.id });
+    expect(await getBalance(material.id, source.id)).toBeCloseTo(-300, 6); // negative, posted anyway
+    expect(await getBalance(material.id, destination.id)).toBeCloseTo(300, 6);
   });
 
   it("transfer moves stock atomically between two locations", async () => {

@@ -42,6 +42,12 @@ export async function getReservedQuantity(materialId: string, locationId: string
   return result._sum.quantity ?? 0;
 }
 
+/** Total reserved quantity for a material across every location, network-wide. */
+export async function getTotalReserved(materialId: string) {
+  const result = await prisma.stockReservation.aggregate({ where: { materialId, status: "ACTIVE" }, _sum: { quantity: true } });
+  return result._sum.quantity ?? 0;
+}
+
 /** On Hand / Reserved / Available for a material at a location — Available = On Hand − Reserved. */
 export async function getStockLevels(materialId: string, locationId: string) {
   const [onHand, reserved] = await Promise.all([getLocationOnHand(materialId, locationId), getReservedQuantity(materialId, locationId)]);

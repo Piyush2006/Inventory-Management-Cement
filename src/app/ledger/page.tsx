@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { Panel, Th, Td, EmptyState } from "@/components/ui";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { formatNumber, formatDateTime } from "@/lib/format";
 import { TRANSACTION_TYPES } from "@/lib/domain/enums";
+import { getCurrentUser, restrictToRequestsOnly } from "@/lib/auth";
 import type { Prisma } from "@prisma/client";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +14,7 @@ export default async function LedgerPage({
 }: {
   searchParams: Promise<{ materialId?: string; type?: string; from?: string; to?: string }>;
 }) {
+  restrictToRequestsOnly(await getCurrentUser());
   const params = await searchParams;
   const materials = await prisma.material.findMany({ orderBy: { name: "asc" } });
 
@@ -75,7 +78,27 @@ export default async function LedgerPage({
         </form>
       </Panel>
 
-      <Panel title={`Movements (${transactions.length})`}>
+      <Panel
+        title={`Movements (${transactions.length})`}
+        action={
+          <ExportCsvButton
+            filename="ledger.csv"
+            headers={["Timestamp", "Type", "Material", "Quantity", "UOM", "From", "To", "Reference", "Batch/Lot", "Reason"]}
+            rows={transactions.map((t) => [
+              formatDateTime(t.timestamp),
+              t.transactionType,
+              t.material.name,
+              formatNumber(t.quantity),
+              t.uom,
+              t.sourceLocation?.name ?? "",
+              t.destinationLocation?.name ?? "",
+              t.reference ?? "",
+              t.batchLot ?? "",
+              t.reason ?? t.processName ?? "",
+            ])}
+          />
+        }
+      >
         {transactions.length === 0 ? (
           <EmptyState title="No movements match these filters" />
         ) : (

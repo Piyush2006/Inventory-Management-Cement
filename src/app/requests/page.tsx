@@ -1,36 +1,59 @@
-import { Suspense } from "react";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
-import { Panel, Th, Td, EmptyState, LinkPill } from "@/components/ui";
-import { RequestStatusBadge } from "@/components/status-badge";
-import { formatNumber, formatDate } from "@/lib/format";
+import { Panel, Th, EmptyState } from "@/components/ui";
+import { ExportCsvButton } from "@/components/export-csv-button";
+import { formatDate } from "@/lib/format";
+import { IN_TRANSIT_LOCATION_TYPE, ACCEPT_REJECT_ROLES, ROUTE_ROLES, ASSIGN_ROLES, OPEN_REQUEST_STATUSES, type UserRole } from "@/lib/domain/enums";
 import { NewRequestForm } from "./new-request-form";
-import { FULFILMENT_ROLES } from "@/lib/domain/enums";
+import { RequestTabs } from "./request-tabs";
+import { RequestListRow } from "./request-list-row";
+import type { Prisma } from "@prisma/client";
 
 export const dynamic = "force-dynamic";
 
-const OPEN_STATUSES = ["PENDING", "ACCEPTED", "ALLOCATED", "IN_TRANSIT", "PARTIALLY_RECEIVED"];
+const OPEN_STATUSES = OPEN_REQUEST_STATUSES;
+const CLOSED_STATUSES = ["COMPLETED", "REJECTED"];
 
-type RequestRowData = Awaited<ReturnType<typeof getRequests>>[number];
+type RequestRow = Prisma.StockRequestGetPayload<{ include: { material: true; requestedBy: true; assignedTo: true; routedTo: true } }>;
+type CurrentUser = { id: string; role: string };
+type Person = { id: string; name: string };
 
-async function getRequests() {
-  return prisma.stockRequest.findMany({ include: { material: true, requestedBy: true, toLocation: true }, orderBy: { createdAt: "desc" } });
-}
-
-function RequestTable({ rows }: { rows: RequestRowData[] }) {
-  if (rows.length === 0) return <EmptyState title="Nothing here" />;
+function RequestTable({
+  rows, emptyTitle, currentUser, supervisors, operators, exportFilename,
+}: {
+  rows: RequestRow[];
+  emptyTitle: string;
+  currentUser: CurrentUser;
+  supervisors: Person[];
+  operators: Person[];
+  exportFilename: string;
+}) {
+  if (rows.length === 0) return <EmptyState title={emptyTitle} />;
+  // Admin has full access per the RBAC matrix — it can act as the accepter/rejecter, the
+  // router, the routed-to supervisor, the assigned operator, or the requester on any row,
+  // not just ones it's tied to.
+  const isAdmin = currentUser.role === "ADMIN";
+  const canAcceptReject = ACCEPT_REJECT_ROLES.includes(currentUser.role as UserRole);
+  const canRoute = ROUTE_ROLES.includes(currentUser.role as UserRole);
+  const canAssignOperator = ASSIGN_ROLES.includes(currentUser.role as UserRole);
   return (
-    <div className="overflow-x-auto scrollbar-thin">
+    <div className="space-y-2">
+      <div className="flex justify-end">
+        <ExportCsvButton
+          filename={exportFilename}
+          headers={["Request ID", "Material", "Qty Requested", "Requested By", "Routed To", "Assigned To", "Required By", "Status"]}
+          rows={rows.map((r) => [r.requestNumber, r.material.name, r.quantityRequested, r.requestedBy.name, r.routedTo?.name ?? "", r.assignedTo?.name ?? "", formatDate(r.requiredByDate), r.status])}
+        />
+      </div>
+      <div className="overflow-x-auto scrollbar-thin">
       <table className="w-full border-collapse">
         <thead>
           <tr className="border-b border-border-soft">
-            <Th>Request</Th>
+            <Th>Request ID</Th>
             <Th>Material</Th>
-            <Th className="text-right">Requested</Th>
-            <Th className="text-right">Received</Th>
-            <Th>To</Th>
+            <Th className="text-right">Qty</Th>
             <Th>Requested By</Th>
-            <Th>Priority</Th>
+            <Th>Assigned To</Th>
             <Th>Required By</Th>
             <Th>Status</Th>
             <Th></Th>
@@ -38,76 +61,119 @@ function RequestTable({ rows }: { rows: RequestRowData[] }) {
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.id} className="border-b border-border-soft last:border-0">
-              <Td className="text-xs text-muted-soft">{r.requestNumber}</Td>
-              <Td>{r.material.name}</Td>
-              <Td className="text-right tabular">{formatNumber(r.quantityRequested)} {r.material.uom}</Td>
-              <Td className="text-right tabular">{formatNumber(r.receivedQuantity)}</Td>
-              <Td className="text-xs text-muted">{r.toLocation.name}</Td>
-              <Td className="text-xs text-muted">{r.requestedBy.name}</Td>
-              <Td>
-                {r.priority === "URGENT" ? (
-                  <span className="rounded-full bg-[var(--status-critical-bg)] px-2 py-0.5 text-xs font-medium text-[var(--status-critical)]">Urgent</span>
-                ) : (
-                  <span className="text-xs text-muted">Normal</span>
-                )}
-              </Td>
-              <Td className="whitespace-nowrap text-xs text-muted">{formatDate(r.requiredByDate)}</Td>
-              <Td><RequestStatusBadge status={r.status as never} /></Td>
-              <Td><LinkPill href={`/requests/${r.id}`}>View →</LinkPill></Td>
-            </tr>
+            <RequestListRow
+              key={r.id}
+              id={r.id}
+              requestNumber={r.requestNumber}
+              materialName={r.material.name}
+              uom={r.material.uom}
+              quantityRequested={r.quantityRequested}
+              requestedByName={r.requestedBy.name}
+              assignedToName={r.assignedTo?.name ?? null}
+              routedToName={r.routedTo?.name ?? null}
+              requiredByDate={r.requiredByDate}
+              status={r.status}
+              canAcceptReject={canAcceptReject}
+              canRoute={canRoute}
+              canAssignOperator={canAssignOperator}
+              isRoutedSupervisor={r.routedToUserId === currentUser.id || isAdmin}
+              isAssignedOperator={r.assignedToUserId === currentUser.id || isAdmin}
+              isRequester={r.requestedByUserId === currentUser.id || isAdmin}
+              supervisors={supervisors}
+              operators={operators}
+              deliveredNotYetReceived={r.deliveredQuantity - r.receivedQuantity}
+            />
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
 
 export default async function RequestsPage() {
-  const [materials, locations, requests, currentUser] = await Promise.all([
+  const [materials, locations, supervisors, operators, currentUser] = await Promise.all([
     prisma.material.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
-    prisma.location.findMany({ where: { active: true, type: { not: "IN_TRANSIT" } }, orderBy: { name: "asc" } }),
-    getRequests(),
+    // Excludes the virtual in-transit location from the From/To pickers — a request can only
+    // move material between two real locations, never to/from the system's internal bucket.
+    prisma.location.findMany({ where: { active: true, type: { not: IN_TRANSIT_LOCATION_TYPE } }, orderBy: { name: "asc" } }),
+    prisma.user.findMany({ where: { role: "STORE_SUPERVISOR", active: true }, orderBy: { name: "asc" } }),
+    prisma.user.findMany({ where: { role: "STORE_OPERATOR", active: true }, orderBy: { name: "asc" } }),
     getCurrentUser(),
   ]);
 
-  const open = requests.filter((r) => OPEN_STATUSES.includes(r.status));
-  const closed = requests.filter((r) => !OPEN_STATUSES.includes(r.status));
-  const isFulfilmentRole = FULFILMENT_ROLES.includes(currentUser.role as "STORE_OPERATOR" | "INVENTORY_MANAGER");
-  const needsMyAction = open.filter((r) => {
-    if (r.status === "PENDING" || r.status === "ACCEPTED" || r.status === "ALLOCATED" || r.status === "PARTIALLY_RECEIVED") return isFulfilmentRole;
-    if (r.status === "IN_TRANSIT") return currentUser.role === "REQUESTER" && r.requestedByUserId === currentUser.id;
-    return false;
-  });
+  const include = { material: true, requestedBy: true, assignedTo: true, routedTo: true } as const;
+
+  // Per the RBAC matrix: Requester sees only their own requests, Store Operator only the
+  // ones assigned to them — everyone else (Store Supervisor "Manage", Inventory Manager
+  // "All", Admin "Full") sees every request, since they're responsible for the whole queue.
+  let actionTitle = "Needs Your Action";
+  let actionWhere: Prisma.StockRequestWhereInput;
+  let openWhere: Prisma.StockRequestWhereInput;
+  let historyWhere: Prisma.StockRequestWhereInput;
+  if (currentUser.role === "REQUESTER") {
+    actionTitle = "Awaiting Your Confirmation";
+    actionWhere = { requestedByUserId: currentUser.id, status: "DELIVERED" };
+    openWhere = { requestedByUserId: currentUser.id, status: { in: OPEN_STATUSES } };
+    historyWhere = { requestedByUserId: currentUser.id, status: { in: CLOSED_STATUSES } };
+  } else if (currentUser.role === "STORE_OPERATOR") {
+    actionTitle = "My Assigned Requests";
+    actionWhere = { assignedToUserId: currentUser.id, status: { in: ["ASSIGNED", "IN_TRANSIT"] } };
+    openWhere = { assignedToUserId: currentUser.id, status: { in: OPEN_STATUSES } };
+    historyWhere = { assignedToUserId: currentUser.id, status: { in: CLOSED_STATUSES } };
+  } else if (currentUser.role === "ADMIN") {
+    // Full access — every status is actionable to Admin (it can even deliver/confirm on
+    // anyone's behalf), so its queue is the broadest of the three "sees everything" roles.
+    actionTitle = "All Actionable Requests";
+    actionWhere = { status: { in: ["NEW_REQUEST", "ACCEPTED", "ASSIGNED", "IN_TRANSIT", "DELIVERED", "PARTIALLY_RECEIVED", "NOT_RECEIVED"] } };
+    openWhere = { status: { in: OPEN_STATUSES } };
+    historyWhere = { status: { in: CLOSED_STATUSES } };
+  } else if (currentUser.role === "INVENTORY_MANAGER") {
+    // Accepts/rejects new requests AND routes accepted ones to a Store Supervisor — sees
+    // both stages. It no longer assigns an operator directly; that's the routed-to
+    // Supervisor's job now.
+    actionTitle = "Requests Requiring Action";
+    actionWhere = { status: { in: ["NEW_REQUEST", "ACCEPTED", "PARTIALLY_RECEIVED", "NOT_RECEIVED"] } };
+    openWhere = { status: { in: OPEN_STATUSES } };
+    historyWhere = { status: { in: CLOSED_STATUSES } };
+  } else {
+    // Store Supervisor — assigns an operator, but only for requests actually routed to THEM
+    // specifically (not just any accepted request) — the two-hop chain is Inventory Manager
+    // routes to a Supervisor, then that Supervisor assigns the Delivery Operator.
+    actionTitle = "Requests Awaiting Assignment";
+    actionWhere = { routedToUserId: currentUser.id, status: { in: ["ACCEPTED", "PARTIALLY_RECEIVED", "NOT_RECEIVED"] } };
+    openWhere = { status: { in: OPEN_STATUSES } };
+    historyWhere = { status: { in: CLOSED_STATUSES } };
+  }
+
+  const [actionRows, openRows, historyRows] = await Promise.all([
+    prisma.stockRequest.findMany({ where: actionWhere, include, orderBy: { requiredByDate: "asc" } }),
+    prisma.stockRequest.findMany({ where: openWhere, include, orderBy: { createdAt: "desc" }, take: 50 }),
+    prisma.stockRequest.findMany({ where: historyWhere, include, orderBy: { updatedAt: "desc" }, take: 30 }),
+  ]);
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-lg font-semibold text-foreground">Stock Requests</h1>
+        <h1 className="text-lg font-semibold text-foreground">Requests</h1>
         <p className="mt-1 text-sm text-muted">
-          Raise, accept, allocate, issue, and receive — every step of a request stays under the same Request ID.
-          Open a request to see its full journey: timeline, quantities at every stage, and every related stock movement.
+          One request moves from Requester to Store Supervisor to Store/Delivery Operator and back to the Requester — the same Request ID throughout. No single person performs the whole workflow.
         </p>
       </div>
 
-      <Panel title="New Stock Request">
-        <Suspense>
-          <NewRequestForm materials={materials.map((m) => ({ id: m.id, name: m.name, uom: m.uom }))} locations={locations.map((l) => ({ id: l.id, name: l.name }))} />
-        </Suspense>
-      </Panel>
-
-      {needsMyAction.length > 0 && (
-        <Panel title={`Needs Your Action (${needsMyAction.length})`} className="border-accent/30">
-          <RequestTable rows={needsMyAction} />
-        </Panel>
-      )}
-
-      <Panel title={`Open Requests (${open.length})`}>
-        <RequestTable rows={open} />
-      </Panel>
-
-      <Panel title={`Request History (${closed.length})`}>
-        <RequestTable rows={closed} />
+      <Panel>
+        <RequestTabs
+          actionLabel={actionTitle}
+          actionContent={<RequestTable rows={actionRows} emptyTitle="Nothing needs your action right now" currentUser={currentUser} supervisors={supervisors} operators={operators} exportFilename="requests-action.csv" />}
+          openContent={<RequestTable rows={openRows} emptyTitle="No open requests" currentUser={currentUser} supervisors={supervisors} operators={operators} exportFilename="requests-open.csv" />}
+          historyContent={<RequestTable rows={historyRows} emptyTitle="No completed or rejected requests yet" currentUser={currentUser} supervisors={supervisors} operators={operators} exportFilename="requests-history.csv" />}
+          newRequestContent={
+            <NewRequestForm
+              materials={materials.map((m) => ({ id: m.id, name: m.name, uom: m.uom }))}
+              locations={locations.map((l) => ({ id: l.id, name: l.name }))}
+            />
+          }
+        />
       </Panel>
     </div>
   );

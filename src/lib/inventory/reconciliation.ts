@@ -1,19 +1,27 @@
 import { prisma } from "@/lib/db";
 import { getLocationOnHand } from "@/lib/inventory/balance";
 import { postAdjustment } from "@/lib/inventory/ledger";
+import { reconcileQualityBalances } from "@/lib/inventory/quality";
+import { DEFAULT_TOLERANCE_PCT } from "@/lib/domain/enums";
 
 export interface CountPreview {
   bookQuantity: number;
   countedQuantity: number;
   varianceQty: number;
   variancePct: number;
+  tolerancePct: number;
+  withinTolerance: boolean;
 }
 
 export async function previewCount(materialId: string, locationId: string, countedQuantity: number): Promise<CountPreview> {
-  const bookQuantity = await getLocationOnHand(materialId, locationId);
+  const [bookQuantity, material] = await Promise.all([
+    getLocationOnHand(materialId, locationId),
+    prisma.material.findUniqueOrThrow({ where: { id: materialId } }),
+  ]);
   const varianceQty = countedQuantity - bookQuantity;
   const variancePct = bookQuantity === 0 ? (varianceQty === 0 ? 0 : 100) : (varianceQty / bookQuantity) * 100;
-  return { bookQuantity, countedQuantity, varianceQty, variancePct };
+  const tolerancePct = material.tolerancePct ?? DEFAULT_TOLERANCE_PCT;
+  return { bookQuantity, countedQuantity, varianceQty, variancePct, tolerancePct, withinTolerance: Math.abs(variancePct) <= tolerancePct };
 }
 
 /** Records a physical count observation. Recording alone never changes stock — posting the adjustment does that, and requires explicit confirmation. */
@@ -50,5 +58,8 @@ export async function postCountAdjustment(input: { physicalCountId: string; reas
   });
 
   await prisma.physicalCount.update({ where: { id: count.id }, data: { adjustmentTransactionId: tx.id } });
+  // postAdjustment always bypasses the negative-balance guard — a large enough count-driven
+  // adjustment can drop On Hand below what's recorded as QC Hold/Blocked at this location.
+  await reconcileQualityBalances(count.materialId, count.locationId);
   return tx;
 }

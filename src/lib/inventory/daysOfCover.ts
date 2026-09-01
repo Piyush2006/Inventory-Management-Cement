@@ -1,9 +1,10 @@
 import { prisma } from "@/lib/db";
-import { getTotalOnHand } from "@/lib/inventory/balance";
+import { getTotalUnrestrictedAvailable } from "@/lib/inventory/quality";
 
 export interface DaysOfCoverResult {
-  currentStock: number;
+  currentStock: number; // Unrestricted (usable) stock — excludes QC Hold/Blocked
   dailyConsumption: number;
+  total30Day: number;
   daysCover: number | null;
   na: boolean;
   naReason?: string;
@@ -11,13 +12,15 @@ export interface DaysOfCoverResult {
 }
 
 /**
- * Informational days-of-cover: current stock ÷ average daily CONSUMPTION over
- * the trailing 30 days, read directly from the ledger (no separate consumption
- * table to fall out of sync with). Never divides by zero — returns N/A instead.
+ * Informational days-of-cover: usable (Unrestricted) stock ÷ average daily CONSUMPTION over
+ * the trailing 30 days, read directly from the ledger (no separate consumption table to fall
+ * out of sync with). QC Hold/Blocked stock is excluded from the numerator — it isn't usable,
+ * so it can't count toward how many days the plant is actually covered. Never divides by
+ * zero — returns N/A instead.
  */
 export async function computeDaysOfCover(materialId: string, windowDays = 30): Promise<DaysOfCoverResult> {
   const material = await prisma.material.findUniqueOrThrow({ where: { id: materialId } });
-  const currentStock = await getTotalOnHand(materialId);
+  const currentStock = await getTotalUnrestrictedAvailable(materialId);
 
   const since = new Date();
   since.setDate(since.getDate() - windowDays);
@@ -25,12 +28,14 @@ export async function computeDaysOfCover(materialId: string, windowDays = 30): P
     where: { materialId, transactionType: "CONSUMPTION", timestamp: { gte: since } },
     _sum: { quantity: true },
   });
-  const dailyConsumption = (consumed._sum.quantity ?? 0) / windowDays;
+  const total30Day = consumed._sum.quantity ?? 0;
+  const dailyConsumption = total30Day / windowDays;
 
   if (dailyConsumption <= 1e-9) {
     return {
       currentStock,
       dailyConsumption: 0,
+      total30Day,
       daysCover: null,
       na: true,
       naReason: "NO_CONSUMPTION_DATA",
@@ -42,8 +47,9 @@ export async function computeDaysOfCover(materialId: string, windowDays = 30): P
   return {
     currentStock,
     dailyConsumption,
+    total30Day,
     daysCover,
     na: false,
-    explanation: `${currentStock.toLocaleString()} ${material.uom} on hand ÷ ${dailyConsumption.toFixed(1)} ${material.uom}/day (${windowDays}-day average consumption) = ${daysCover.toFixed(1)} days.`,
+    explanation: `${currentStock.toLocaleString()} ${material.uom} unrestricted ÷ ${dailyConsumption.toFixed(1)} ${material.uom}/day (${windowDays}-day average consumption) = ${daysCover.toFixed(1)} days.`,
   };
 }
