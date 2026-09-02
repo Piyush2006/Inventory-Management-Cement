@@ -104,6 +104,10 @@ export async function postMovement(input: PostMovementInput) {
       // No stock movement is blocked by what's on hand or a location's nominal capacity, per
       // explicit request — both are informational only (a negative or over-100%-full figure is
       // still shown honestly, never prevented). An explicit override still wins either way.
+      // The one deliberate exception is DISPATCH: src/lib/inventory/dispatch.ts always passes
+      // allowNegative: false there, since that spec explicitly requires Unrestricted-stock
+      // sufficiency — don't "fix" that by removing its override, and don't reintroduce blocking
+      // here for anything else.
       allowNegative: input.allowNegative ?? true,
       allowOverCapacity: input.allowOverCapacity ?? true,
     });

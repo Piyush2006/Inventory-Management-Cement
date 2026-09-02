@@ -4,6 +4,7 @@ import { Panel, Th, Td, EmptyState } from "@/components/ui";
 import { StatusBadge } from "@/components/status-badge";
 import { formatNumber } from "@/lib/format";
 import type { AttentionItem } from "@/lib/inventory/dashboard";
+import type { InventoryInsight, InsightType } from "@/lib/inventory/insights";
 
 // Icons8 (see MCP server attribution — genuine Icons8 icons, fluent-systems-regular style).
 const ICON = {
@@ -37,14 +38,17 @@ export function StatCard({
 }) {
   const s = TONE_STYLES[tone];
   return (
-    <Link href={href} className="shadow-panel block rounded-lg border border-border bg-surface p-4 transition-colors hover:border-accent/40">
-      <div className={`flex h-10 w-10 items-center justify-center rounded-full ${s.badgeBg}`}>
-        <Image src={ICON[icon]} alt="" width={22} height={22} />
+    <Link href={href} className="shadow-panel flex items-center gap-2.5 rounded-lg border border-border bg-surface px-3 py-2.5 transition-colors hover:border-accent/40">
+      <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${s.badgeBg}`}>
+        <Image src={ICON[icon]} alt="" width={16} height={16} />
       </div>
-      <div className="mt-3 text-xs font-medium uppercase tracking-wide text-muted">{label}</div>
-      <div className="mt-1 text-2xl font-semibold tabular text-foreground">{formatNumber(value)}</div>
-      <div className="text-xs text-muted-soft">{unit}</div>
-      <div className={`mt-2 text-xs font-medium ${s.badgeFg}`}>View all →</div>
+      <div className="min-w-0">
+        <div className="truncate text-[10px] font-medium uppercase tracking-wide text-muted">{label}</div>
+        <div className="flex items-baseline gap-1">
+          <span className="text-lg font-semibold tabular leading-tight text-foreground">{formatNumber(value)}</span>
+          <span className="truncate text-[11px] text-muted-soft">{unit}</span>
+        </div>
+      </div>
     </Link>
   );
 }
@@ -88,6 +92,62 @@ export function NeedsAttentionPanel({ items }: { items: AttentionItem[] }) {
           );
         })}
       </div>
+    </Panel>
+  );
+}
+
+const INSIGHT_TONE: Record<InsightType, Tone> = {
+  HIGH_RISK: "critical",
+  QUALITY_HOLD_RISK: "exception",
+  MEDIUM_RISK: "warning",
+  CONSUMPTION_ANOMALY: "transit",
+};
+
+export function AiInsightsPanel({
+  insights,
+  hasConsumptionData,
+  unavailable,
+}: {
+  insights: InventoryInsight[];
+  hasConsumptionData: boolean;
+  unavailable: boolean;
+}) {
+  return (
+    <Panel title="✨ AI Inventory Insights">
+      {unavailable ? (
+        <p className="text-sm text-muted-soft">AI insights are temporarily unavailable.</p>
+      ) : insights.length === 0 ? (
+        <p className="text-sm text-muted-soft">
+          {hasConsumptionData ? "No significant inventory risks detected." : "Insufficient consumption data to estimate risk."}
+        </p>
+      ) : (
+        <div className="space-y-2.5">
+          {insights.map((ins) => {
+            const s = TONE_STYLES[INSIGHT_TONE[ins.type]];
+            return (
+              <div key={`${ins.materialId}-${ins.type}`} className={`rounded-md ${s.badgeBg} p-3`}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-sm font-medium text-foreground">{ins.materialName}</span>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${s.badgeFg} ${s.badgeBg} border border-border-soft`}>{ins.typeLabel}</span>
+                  </div>
+                  <Link href={`/inventory/${ins.materialId}`} className="shrink-0 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground hover:border-accent/50">
+                    View Details →
+                  </Link>
+                </div>
+                <p className="mt-1.5 text-xs text-muted">{ins.explanation}</p>
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-soft">
+                  {ins.metrics.map((met) => (
+                    <span key={met.label}>
+                      {met.label}: <span className="text-foreground">{met.value}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </Panel>
   );
 }

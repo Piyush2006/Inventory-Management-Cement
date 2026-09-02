@@ -18,6 +18,7 @@ export const TRANSACTION_TYPES = [
   "TRANSFER_IN",
   "ADJUSTMENT",
   "OPENING_BALANCE",
+  "DISPATCH",
 ] as const;
 export type TransactionType = (typeof TRANSACTION_TYPES)[number];
 
@@ -26,7 +27,7 @@ export type TransactionType = (typeof TRANSACTION_TYPES)[number];
 // tell postMovement() which side to set for single-sided transaction types.
 // TRANSFER_OUT/TRANSFER_IN are two-sided (both fields set on one row, per the
 // Start Delivery / Confirm Receipt request flow) and are posted directly, not via postMovement.
-export const OUTBOUND_TX_TYPES: TransactionType[] = ["CONSUMPTION"];
+export const OUTBOUND_TX_TYPES: TransactionType[] = ["CONSUMPTION", "DISPATCH"];
 export const INBOUND_TX_TYPES: TransactionType[] = ["RECEIPT", "OPENING_BALANCE"];
 
 export const STOCK_STATUSES = ["HEALTHY", "LOW", "CRITICAL"] as const;
@@ -90,6 +91,17 @@ export const REQUEST_EVENT_ACTIONS = [
 export type RequestEventAction = (typeof REQUEST_EVENT_ACTIONS)[number];
 
 // ---------------------------------------------------------------------------
+// Dispatch — finished-goods/customer dispatch, separate from the Request lifecycle above.
+// Simple linear lifecycle plus one exception (Cancelled, reachable up to but not including
+// Dispatched — once material has actually left the plant it can't be cancelled).
+// ---------------------------------------------------------------------------
+export const DISPATCH_STATUSES = ["CREATED", "APPROVED", "LOADING", "DISPATCHED", "CANCELLED"] as const;
+export type DispatchStatus = (typeof DISPATCH_STATUSES)[number];
+
+export const DISPATCH_EVENT_ACTIONS = ["CREATED", "APPROVED", "REASSIGNED", "LOADING_STARTED", "DISPATCHED", "CANCELLED"] as const;
+export type DispatchEventAction = (typeof DISPATCH_EVENT_ACTIONS)[number];
+
+// ---------------------------------------------------------------------------
 // Users & roles — real server-side enforcement (src/lib/auth.ts), not just hidden buttons.
 // No single role can perform the entire request workflow end to end.
 // ---------------------------------------------------------------------------
@@ -129,3 +141,16 @@ export const STOCK_OPS_ROLES: UserRole[] = ["STORE_OPERATOR", "INVENTORY_MANAGER
 export const ADJUSTMENT_ROLES: UserRole[] = ["INVENTORY_MANAGER", "ADMIN"];
 // Only the Inventory Manager (or Admin) manages the material/location master data.
 export const MASTER_DATA_ROLES: UserRole[] = ["INVENTORY_MANAGER", "ADMIN"];
+
+// Dispatch (customer/finished-goods dispatch) — deliberately grants Store Supervisor real
+// access here (create/approve/execute-unrestricted/cancel), unlike its bare "no access" on
+// the rest of Stock Operations (STOCK_OPS_ROLES above). See restrictStockOperationsFromSupervisor
+// in auth.ts and movements/page.tsx for how the Supervisor's path to only this one tab is opened.
+export const DISPATCH_CREATE_ROLES: UserRole[] = ["STORE_SUPERVISOR", "INVENTORY_MANAGER", "ADMIN"];
+export const DISPATCH_APPROVE_ROLES: UserRole[] = ["STORE_SUPERVISOR", "INVENTORY_MANAGER", "ADMIN"];
+// Start Loading / Mark Dispatched. Store Operator is further ownership-checked inline against
+// Dispatch.assignedToUserId (src/lib/inventory/dispatch.ts) — Supervisor/Inventory Manager/Admin
+// are not, mirroring the existing assignedToUserId-vs-Admin pattern in requests.ts, just
+// generalized to two unrestricted roles instead of one.
+export const DISPATCH_EXECUTE_ROLES: UserRole[] = ["STORE_OPERATOR", "STORE_SUPERVISOR", "INVENTORY_MANAGER", "ADMIN"];
+export const DISPATCH_CANCEL_ROLES: UserRole[] = ["STORE_SUPERVISOR", "INVENTORY_MANAGER", "ADMIN"];

@@ -33,6 +33,7 @@ model Location {
   requestsTo           StockRequest[]         @relation("RequestToLocation")
   qualityBalances      QualityBalance[]
   qualityStatusEvents  QualityStatusEvent[]
+  dispatchesFrom       Dispatch[]             @relation("DispatchSourceLocation")
 }
 
 // ---------------------------------------------------------------------------
@@ -65,6 +66,7 @@ model Material {
   materialReceipts MaterialReceipt[]
   qualityBalances     QualityBalance[]
   qualityStatusEvents QualityStatusEvent[]
+  dispatches          Dispatch[]
 
   @@index([category])
 }
@@ -196,6 +198,13 @@ model User {
   requestsAssignedBy StockRequest[] @relation("AssignedBy")
   requestsDelivered  StockRequest[] @relation("DeliveredBy")
   events             RequestEvent[]
+
+  dispatchesCreated    Dispatch[]      @relation("DispatchCreatedBy")
+  dispatchesAssignedTo Dispatch[]      @relation("DispatchAssignedTo")
+  dispatchesApproved   Dispatch[]      @relation("DispatchApprovedBy")
+  dispatchesDispatched Dispatch[]      @relation("DispatchDispatchedBy")
+  dispatchesCancelled  Dispatch[]      @relation("DispatchCancelledBy")
+  dispatchEvents       DispatchEvent[]
 }
 
 // ---------------------------------------------------------------------------
@@ -386,4 +395,81 @@ model MaterialReceipt {
 
   @@index([status])
   @@index([materialId])
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch — finished-goods/customer dispatch. Separate from the internal
+// Stock Request lifecycle above: this is material leaving the plant for a
+// customer, not moving between two internal locations. Only Unrestricted
+// stock is eligible (checked live against QualityBalance at Approve, Start
+// Loading, and immediately before the DISPATCHED ledger write — see
+// src/lib/inventory/dispatch.ts). Mirrors the StockRequest/RequestEvent split:
+// denormalized actor columns here for fast display, DispatchEvent below is the
+// append-only audit trail / timeline source.
+// ---------------------------------------------------------------------------
+
+model Dispatch {
+  id                  String   @id @default(cuid())
+  dispatchReference   String   @unique
+  materialId          String
+  quantity            Float
+  sourceLocationId    String
+  customerDestination String
+  status              String   @default("CREATED")
+  // CREATED | APPROVED | LOADING | DISPATCHED | CANCELLED
+  batchLot            String?
+  weighmentReference  String?
+  notes               String?
+
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  // The specific Store Operator who will execute this dispatch — set (and
+  // re-settable while still APPROVED) at Approval time, since the spec's own
+  // RBAC requires Store Operator to see/act on only their assigned Dispatches.
+  assignedToUserId String?
+  approvedByUserId String?
+  approvedAt       DateTime?
+
+  loadingStartedByUserId String?
+  loadingStartedAt       DateTime?
+
+  dispatchedByUserId     String?
+  dispatchedAt            DateTime?
+  inventoryTransactionId String? // the DISPATCH ledger row — set only once actually dispatched
+
+  cancelledByUserId  String?
+  cancelledAt         DateTime?
+  cancellationReason String?
+
+  updatedAt DateTime @updatedAt
+
+  material       Material @relation(fields: [materialId], references: [id])
+  sourceLocation Location @relation("DispatchSourceLocation", fields: [sourceLocationId], references: [id])
+  createdBy      User     @relation("DispatchCreatedBy", fields: [createdByUserId], references: [id])
+  assignedTo     User?    @relation("DispatchAssignedTo", fields: [assignedToUserId], references: [id])
+  approvedBy     User?    @relation("DispatchApprovedBy", fields: [approvedByUserId], references: [id])
+  dispatchedBy   User?    @relation("DispatchDispatchedBy", fields: [dispatchedByUserId], references: [id])
+  cancelledBy    User?    @relation("DispatchCancelledBy", fields: [cancelledByUserId], references: [id])
+
+  events DispatchEvent[]
+
+  @@index([status])
+}
+
+// One row per lifecycle action — the persisted source for the Dispatch timeline
+// and audit trail (who / role / when / reason), same pattern as RequestEvent.
+model DispatchEvent {
+  id         String   @id @default(cuid())
+  dispatchId String
+  action     String // CREATED | APPROVED | REASSIGNED | LOADING_STARTED | DISPATCHED | CANCELLED
+  userId     String
+  role       String
+  reason     String?
+  timestamp  DateTime @default(now())
+
+  dispatch Dispatch @relation(fields: [dispatchId], references: [id])
+  user     User     @relation(fields: [userId], references: [id])
+
+  @@index([dispatchId, timestamp])
 }

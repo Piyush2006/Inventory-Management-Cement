@@ -23,6 +23,14 @@ import {
   postMaterialReceipt,
   cancelMaterialReceipt,
 } from "@/lib/inventory/procurement";
+import {
+  createDispatch,
+  approveDispatch,
+  reassignDispatchOperator,
+  startDispatchLoading,
+  markDispatched,
+  cancelDispatch,
+} from "@/lib/inventory/dispatch";
 import { getCurrentUser, setCurrentUser, requireRole } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { ADJUSTMENT_ROLES, STOCK_OPS_ROLES, MASTER_DATA_ROLES, type TransactionType, type QualityStatus } from "@/lib/domain/enums";
@@ -578,5 +586,107 @@ export async function actionCancelMaterialReceipt(formData: FormData) {
     return ok();
   } catch (e) {
     return fail(e instanceof Error ? e.message : "Failed to cancel receipt");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch — finished-goods/customer dispatch, separate from the Request lifecycle above.
+// ---------------------------------------------------------------------------
+
+function revalidateDispatchViews() {
+  revalidateInventoryViews();
+  revalidatePath("/movements");
+}
+
+export async function actionCreateDispatch(formData: FormData) {
+  try {
+    const user = await getCurrentUser();
+    const materialId = String(formData.get("materialId"));
+    const quantity = Number(formData.get("quantity"));
+    const sourceLocationId = String(formData.get("sourceLocationId"));
+    const customerDestination = String(formData.get("customerDestination") || "");
+    if (!materialId || !sourceLocationId || Number.isNaN(quantity) || quantity <= 0 || !customerDestination.trim()) {
+      return fail("Missing required fields");
+    }
+    const dispatch = await createDispatch({
+      materialId,
+      quantity,
+      sourceLocationId,
+      customerDestination,
+      batchLot: formData.get("batchLot") ? String(formData.get("batchLot")) : undefined,
+      weighmentReference: formData.get("weighmentReference") ? String(formData.get("weighmentReference")) : undefined,
+      notes: formData.get("notes") ? String(formData.get("notes")) : undefined,
+      createdByUserId: user.id,
+    });
+    revalidatePath("/movements");
+    return ok({ dispatchId: dispatch.id, dispatchReference: dispatch.dispatchReference });
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to create dispatch");
+  }
+}
+
+export async function actionApproveDispatch(formData: FormData) {
+  try {
+    const id = String(formData.get("id"));
+    const operatorUserId = String(formData.get("operatorUserId"));
+    if (!id || !operatorUserId) return fail("Choose an operator to assign");
+    const user = await getCurrentUser();
+    await approveDispatch(id, operatorUserId, user.id);
+    revalidateDispatchViews();
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to approve dispatch");
+  }
+}
+
+export async function actionReassignDispatchOperator(formData: FormData) {
+  try {
+    const id = String(formData.get("id"));
+    const operatorUserId = String(formData.get("operatorUserId"));
+    if (!id || !operatorUserId) return fail("Choose an operator to reassign to");
+    const user = await getCurrentUser();
+    await reassignDispatchOperator(id, operatorUserId, user.id);
+    revalidatePath("/movements");
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to reassign dispatch");
+  }
+}
+
+export async function actionStartDispatchLoading(formData: FormData) {
+  try {
+    const id = String(formData.get("id"));
+    const user = await getCurrentUser();
+    await startDispatchLoading(id, user.id);
+    revalidateDispatchViews();
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to start loading");
+  }
+}
+
+export async function actionMarkDispatched(formData: FormData) {
+  try {
+    const id = String(formData.get("id"));
+    const user = await getCurrentUser();
+    await markDispatched(id, user.id);
+    revalidateDispatchViews();
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to mark dispatched");
+  }
+}
+
+export async function actionCancelDispatch(formData: FormData) {
+  try {
+    const id = String(formData.get("id"));
+    const reason = String(formData.get("reason") || "");
+    if (!reason.trim()) return fail("A reason is required to cancel a dispatch");
+    const user = await getCurrentUser();
+    await cancelDispatch(id, user.id, reason);
+    revalidatePath("/movements");
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to cancel dispatch");
   }
 }

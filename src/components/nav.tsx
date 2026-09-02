@@ -16,13 +16,10 @@ export function Sidebar({ role }: { role: string }) {
   const pathname = usePathname();
   // A Requester's whole surface is Requests — raise, view own, confirm/not-received.
   // No Dashboard, Inventory, Locations, Materials, or Stock Operations menu at all.
-  // Store Supervisor manages the request queue, not stock directly — no Stock Operations menu either.
-  const items =
-    role === "REQUESTER"
-      ? NAV_ITEMS.filter((i) => i.href === "/requests")
-      : role === "STORE_SUPERVISOR"
-        ? NAV_ITEMS.filter((i) => i.href !== "/movements")
-        : NAV_ITEMS;
+  // Store Supervisor now reaches Stock Operations too — solely for the Dispatch tab (see
+  // movements/page.tsx); the Receive Material/Consume/Transfer/Adjustment tabs stay just as
+  // inaccessible to them there as before, this only affects whether the menu item shows at all.
+  const items = role === "REQUESTER" ? NAV_ITEMS.filter((i) => i.href === "/requests") : NAV_ITEMS;
   return (
     <nav className="flex h-full w-56 shrink-0 flex-col overflow-y-auto border-r border-border bg-surface px-3 py-4 scrollbar-thin">
       <Link href={role === "REQUESTER" ? "/requests" : "/"} className="mb-5 flex items-center gap-2 px-2">

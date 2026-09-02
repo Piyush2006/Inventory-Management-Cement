@@ -15,12 +15,15 @@ import {
 } from "../src/lib/inventory/requests";
 import { resolveSupplier, createPurchaseReference, createAndPostMaterialReceipt, createMaterialReceipt } from "../src/lib/inventory/procurement";
 import { changeQualityStatus } from "../src/lib/inventory/quality";
+import { createDispatch, approveDispatch, startDispatchLoading, markDispatched, cancelDispatch } from "../src/lib/inventory/dispatch";
 
 async function main() {
   await ensureSqliteTuned();
 
   console.log("Wiping existing data...");
   await prisma.$transaction([
+    prisma.dispatchEvent.deleteMany(),
+    prisma.dispatch.deleteMany(),
     prisma.requestEvent.deleteMany(),
     prisma.stockReservation.deleteMany(),
     prisma.materialReceipt.deleteMany(),
@@ -260,6 +263,25 @@ async function main() {
   const req13 = await createStockRequest({ materialId: slag.id, quantityRequested: 25, requiredByDate: new Date(Date.now() + 3 * 86400000), fromLocationId: maintenanceStore.id, toLocationId: cementMill1.id, reason: "Trial blend follow-up", requestedByUserId: priya.id });
   await acceptStockRequest(req13.id, neha.id);
   await routeToSupervisor(req13.id, amit.id, neha.id);
+
+  console.log("Seeding the Dispatch lifecycle — customer-bound finished goods, separate from the internal Request lifecycle...");
+
+  // DIS-A — full happy path: CREATED -> APPROVED -> LOADING -> DISPATCHED, reduces Cement Silo 1 exactly once.
+  const disA = await createDispatch({ materialId: cementGp.id, quantity: 300, sourceLocationId: cementSilo1.id, customerDestination: "Sydney Readymix Concrete Pty Ltd", weighmentReference: "WB-88213", createdByUserId: amit.id });
+  await approveDispatch(disA.id, suresh.id, amit.id);
+  await startDispatchLoading(disA.id, suresh.id);
+  await markDispatched(disA.id, suresh.id);
+
+  // DIS-B — APPROVED and assigned, loading not yet started.
+  const disB = await createDispatch({ materialId: cementGb.id, quantity: 200, sourceLocationId: cementSilo2.id, customerDestination: "Western Sydney Builders Co", createdByUserId: neha.id });
+  await approveDispatch(disB.id, suresh.id, neha.id);
+
+  // DIS-C — CREATED, awaiting approval — a live "needs your action" item for Amit/Neha.
+  await createDispatch({ materialId: cementBag.id, quantity: 500, sourceLocationId: baggedWarehouse.id, customerDestination: "Metro Hardware Distributors", createdByUserId: amit.id });
+
+  // DIS-D — CANCELLED before dispatch, no inventory impact.
+  const disD = await createDispatch({ materialId: cementHe.id, quantity: 100, sourceLocationId: cementSilo3.id, customerDestination: "Coastal Infrastructure Projects", createdByUserId: neha.id });
+  await cancelDispatch(disD.id, neha.id, "Customer postponed pickup indefinitely");
 
   console.log("Seeding the external Receive Material (GRN) demo — separate from the internal request lifecycle...");
   const abcMinerals = await resolveSupplier({ name: "ABC Minerals" });

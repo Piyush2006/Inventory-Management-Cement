@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { getDashboardData } from "@/lib/inventory/dashboard";
+import { getInventoryInsights } from "@/lib/inventory/insights";
 import { Panel, Th, Td, LinkPill } from "@/components/ui";
 import { StatusBadge } from "@/components/status-badge";
 import { TrendChart } from "@/components/charts/trend-chart";
-import { StatCard, NeedsAttentionPanel, RequestStatusPanel, StockWatchlistPanel } from "./dashboard-widgets";
+import { StatCard, NeedsAttentionPanel, RequestStatusPanel, StockWatchlistPanel, AiInsightsPanel } from "./dashboard-widgets";
 import { formatNumber, formatDateTime } from "@/lib/format";
 import { getCurrentUser, restrictToRequestsOnly } from "@/lib/auth";
 
@@ -11,7 +12,13 @@ export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   restrictToRequestsOnly(await getCurrentUser());
-  const data = await getDashboardData();
+  const [data, insightsResult] = await Promise.all([
+    getDashboardData(),
+    // Advisory-only: a failure here must never take down the rest of the Dashboard.
+    getInventoryInsights()
+      .then((r) => ({ ...r, unavailable: false }))
+      .catch(() => ({ insights: [], hasConsumptionData: false, unavailable: true })),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -20,7 +27,7 @@ export default async function DashboardPage() {
         <p className="mt-1 text-sm text-muted">Overview of inventory, requests and exceptions.</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         <StatCard icon="critical" tone="critical" label="Critical Stock" value={data.kpi.criticalCount} unit="Items" href="/inventory?status=CRITICAL" />
         <StatCard icon="low" tone="warning" label="Low Stock" value={data.kpi.lowCount} unit="Items" href="/inventory?status=LOW" />
         <StatCard icon="transit" tone="transit" label="In Transit" value={data.kpi.totalInTransitMt} unit="MT" href="/requests" />
@@ -28,31 +35,14 @@ export default async function DashboardPage() {
         <StatCard icon="exception" tone="exception" label="Exceptions" value={data.kpi.exceptionsCount} unit="Items" href="/requests" />
       </div>
 
-      <NeedsAttentionPanel items={data.needsAttention} />
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <RequestStatusPanel rows={data.requestsByStatus} />
-        <StockWatchlistPanel rows={data.stockWatchlist} />
-      </div>
-
-      {data.highFillSilos.length > 0 && (
-        <Panel title="Silos Approaching Capacity">
-          <div className="space-y-2">
-            {data.highFillSilos.map((s) => (
-              <div key={s.location.id} className="flex items-center justify-between rounded-md border border-[var(--status-warning)]/25 bg-[var(--status-warning-bg)] px-3 py-2 text-sm">
-                <span className="text-foreground">{s.location.name} is {s.fillPct.toFixed(0)}% full — approaching capacity</span>
-              </div>
-            ))}
-          </div>
-        </Panel>
-      )}
+      <AiInsightsPanel insights={insightsResult.insights} hasConsumptionData={insightsResult.hasConsumptionData} unavailable={insightsResult.unavailable} />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Panel title="Inventory Trend (14 days)">
-          <TrendChart data={data.trend} dataKey="stockMt" unit="MT" color="#3aa0ff" height={200} />
+          <TrendChart data={data.trend} dataKey="stockMt" unit="MT" color="#3aa0ff" height={180} />
         </Panel>
         <Panel title="Consumption Trend (14 days)">
-          <TrendChart data={data.trend} dataKey="consumptionMt" unit="MT/day" color="#f5a623" height={200} />
+          <TrendChart data={data.trend} dataKey="consumptionMt" unit="MT/day" color="#f5a623" height={180} />
         </Panel>
       </div>
 
@@ -75,6 +65,25 @@ export default async function DashboardPage() {
           ))}
         </div>
       </Panel>
+
+      {data.highFillSilos.length > 0 && (
+        <Panel title="Silos Approaching Capacity">
+          <div className="space-y-2">
+            {data.highFillSilos.map((s) => (
+              <div key={s.location.id} className="flex items-center justify-between rounded-md border border-[var(--status-warning)]/25 bg-[var(--status-warning-bg)] px-3 py-2 text-sm">
+                <span className="text-foreground">{s.location.name} is {s.fillPct.toFixed(0)}% full — approaching capacity</span>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      <NeedsAttentionPanel items={data.needsAttention} />
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <RequestStatusPanel rows={data.requestsByStatus} />
+        <StockWatchlistPanel rows={data.stockWatchlist} />
+      </div>
 
       <Panel title="Inventory">
         <div className="overflow-x-auto scrollbar-thin">
