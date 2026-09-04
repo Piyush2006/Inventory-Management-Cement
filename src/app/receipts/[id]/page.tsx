@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { Panel, KpiTile } from "@/components/ui";
 import { formatNumber, formatDate, formatDateTime } from "@/lib/format";
 import { getCurrentUser, restrictToRequestsOnly, restrictStockOperationsFromSupervisor } from "@/lib/auth";
-import { STOCK_OPS_ROLES, type UserRole } from "@/lib/domain/enums";
+import { STOCK_OPS_ROLES, ROLE_LABELS, type UserRole } from "@/lib/domain/enums";
 import { ReceiptActions } from "./receipt-actions";
 
 export const dynamic = "force-dynamic";
@@ -56,7 +56,7 @@ export default async function ReceiptDetailPage({ params }: { params: Promise<{ 
           <ReceiptActions id={receipt.id} status={receipt.status} />
         ) : (
           <p className="text-sm text-muted-soft">
-            Your role ({currentUser.role}) cannot post or cancel receipts — this requires Store/Delivery Operator, Inventory Manager, or Admin.
+            Your role ({ROLE_LABELS[currentUser.role as UserRole]}) cannot post or cancel receipts — this requires Store/Delivery Operator, Inventory Manager, or Admin.
           </p>
         )}
       </Panel>

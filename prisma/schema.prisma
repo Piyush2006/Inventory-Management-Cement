@@ -188,6 +188,9 @@ model User {
   name   String
   role   String // REQUESTER | STORE_SUPERVISOR | STORE_OPERATOR | INVENTORY_MANAGER | ADMIN
   active Boolean @default(true)
+  email  String? // optional — only needed for Email-channel notifications; In-App needs none
+
+  notifications Notification[]
 
   requestsCreated    StockRequest[] @relation("RequestedBy")
   requestsAccepted   StockRequest[] @relation("AcceptedBy")
@@ -472,4 +475,62 @@ model DispatchEvent {
   user     User     @relation(fields: [userId], references: [id])
 
   @@index([dispatchId, timestamp])
+}
+
+// ---------------------------------------------------------------------------
+// Notifications — additive, sits on top of the existing workflows above.
+// Never a source of truth for inventory/request/dispatch state; only ever
+// references those existing records by id.
+// ---------------------------------------------------------------------------
+
+model NotificationRule {
+  id               String   @id @default(cuid())
+  event            String   // one of NOTIFICATION_EVENTS (src/lib/notifications/events.ts)
+  recipientType    String   // ROLE | SPECIFIC_USER | RELEVANT_USER
+  recipientRole    String?  // set when recipientType = ROLE
+  recipientUserId  String?  // set when recipientType = SPECIFIC_USER
+  channel          String   // IN_APP | EMAIL | BOTH
+  status           String   @default("ENABLED") // ENABLED | DISABLED
+  notificationType String   // ACTION_REQUIRED | INFORMATION
+  title            String   // may contain {template} variables
+  message          String   // may contain {template} variables
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  notifications Notification[]
+
+  @@index([event, status])
+}
+
+model Notification {
+  id                String    @id @default(cuid())
+  ruleId            String?
+  recipientUserId   String
+  type              String    // ACTION_REQUIRED | INFORMATION
+  title             String
+  message           String
+  relatedRecordType String?   // REQUEST | DISPATCH | MATERIAL
+  relatedRecordId   String?
+  link              String?   // concrete existing route, e.g. /requests/<id>
+  read              Boolean   @default(false)
+  readAt            DateTime?
+  channel           String    // IN_APP | EMAIL | BOTH, copied from the rule at generation time
+  emailStatus       String?   // SENT | FAILED | NOT_APPLICABLE
+  emailError        String?
+  createdAt         DateTime  @default(now())
+
+  rule      NotificationRule? @relation(fields: [ruleId], references: [id])
+  recipient User              @relation(fields: [recipientUserId], references: [id])
+
+  @@index([recipientUserId, read])
+}
+
+// Last-known stock status per material, used only to detect a WORSENING transition
+// (HEALTHY->LOW->CRITICAL) so Stock Low/Critical notifications fire once per transition,
+// not once per balance-changing action while already critical. Never read by any existing
+// inventory calculation — purely a notification-system cache.
+model MaterialAlertState {
+  materialId String   @id
+  lastStatus String   // HEALTHY | LOW | CRITICAL
+  updatedAt  DateTime @updatedAt
 }

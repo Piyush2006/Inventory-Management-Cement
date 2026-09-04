@@ -157,7 +157,7 @@ export default async function RequestsPage() {
       <div>
         <h1 className="text-lg font-semibold text-foreground">Requests</h1>
         <p className="mt-1 text-sm text-muted">
-          One request moves from Requester to Store Supervisor to Store/Delivery Operator and back to the Requester — the same Request ID throughout. No single person performs the whole workflow.
+          One request moves from Indentor to Store Supervisor to Store/Delivery Operator and back to the Indentor — the same Request ID throughout. No single person performs the whole workflow.
         </p>
       </div>
 

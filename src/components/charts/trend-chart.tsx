@@ -26,18 +26,22 @@ export function TrendChart({
             <stop offset="95%" stopColor={color} stopOpacity={0} />
           </linearGradient>
         </defs>
-        <CartesianGrid stroke="#1a212e" strokeDasharray="3 3" vertical={false} />
+        {/* CSS custom properties, not fixed hex — these were hardcoded to dark-theme values
+            before, so the tooltip rendered dark-on-dark (unreadable) in light mode. */}
+        <CartesianGrid stroke="var(--border-soft)" strokeDasharray="3 3" vertical={false} />
         <XAxis
           dataKey="date"
-          tick={{ fontSize: 10, fill: "#5c6779" }}
+          tick={{ fontSize: 10, fill: "var(--muted-soft)" }}
           tickFormatter={(v: string) => new Date(v).toLocaleDateString("en-AU", { day: "2-digit", month: "short" })}
-          axisLine={{ stroke: "#232b3a" }}
+          axisLine={{ stroke: "var(--border)" }}
           tickLine={false}
           minTickGap={30}
         />
-        <YAxis tick={{ fontSize: 10, fill: "#5c6779" }} axisLine={false} tickLine={false} width={48} />
+        <YAxis tick={{ fontSize: 10, fill: "var(--muted-soft)" }} axisLine={false} tickLine={false} width={48} />
         <Tooltip
-          contentStyle={{ background: "#161d29", border: "1px solid #232b3a", borderRadius: 8, fontSize: 12 }}
+          contentStyle={{ background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12, color: "var(--foreground)" }}
+          labelStyle={{ color: "var(--foreground)" }}
+          itemStyle={{ color: "var(--foreground)" }}
           labelFormatter={(v) => (v ? new Date(String(v)).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }) : "")}
           formatter={(value) => [`${Number(value).toLocaleString()} ${unit}`, ""]}
         />

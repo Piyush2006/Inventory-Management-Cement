@@ -16,12 +16,18 @@ import {
 import { resolveSupplier, createPurchaseReference, createAndPostMaterialReceipt, createMaterialReceipt } from "../src/lib/inventory/procurement";
 import { changeQualityStatus } from "../src/lib/inventory/quality";
 import { createDispatch, approveDispatch, startDispatchLoading, markDispatched, cancelDispatch } from "../src/lib/inventory/dispatch";
+import { NOTIFICATION_EVENT_META } from "../src/lib/notifications/events";
+import { triggerNotification } from "../src/lib/notifications/engine";
+import { checkStockThresholds } from "../src/lib/notifications/stockThreshold";
 
 async function main() {
   await ensureSqliteTuned();
 
   console.log("Wiping existing data...");
   await prisma.$transaction([
+    prisma.notification.deleteMany(),
+    prisma.notificationRule.deleteMany(),
+    prisma.materialAlertState.deleteMany(),
     prisma.dispatchEvent.deleteMany(),
     prisma.dispatch.deleteMany(),
     prisma.requestEvent.deleteMany(),
@@ -220,7 +226,7 @@ async function main() {
   await markNotReceived(req6.id, priya.id, "Material delivered to wrong location");
 
   // REQ-007 — NEW_REQUEST, urgent: a live "needs your action" item for the Store Supervisor.
-  await createStockRequest({ materialId: ironCorrective.id, quantityRequested: 150, requiredByDate: new Date(Date.now() + 1 * 86400000), priority: "URGENT", fromLocationId: maintenanceStore.id, toLocationId: cementMill1.id, reason: "Kiln feed correction", requestedByUserId: rahul.id });
+  const req7 = await createStockRequest({ materialId: ironCorrective.id, quantityRequested: 150, requiredByDate: new Date(Date.now() + 1 * 86400000), priority: "URGENT", fromLocationId: maintenanceStore.id, toLocationId: cementMill1.id, reason: "Kiln feed correction", requestedByUserId: rahul.id });
 
   // REQ-008 — ACCEPTED, awaiting assignment.
   const req8 = await createStockRequest({ materialId: sand.id, quantityRequested: 60, requiredByDate: new Date(Date.now() + 4 * 86400000), fromLocationId: maintenanceStore.id, toLocationId: cementMill1.id, reason: "Civil repair work", requestedByUserId: priya.id });
@@ -277,7 +283,7 @@ async function main() {
   await approveDispatch(disB.id, suresh.id, neha.id);
 
   // DIS-C — CREATED, awaiting approval — a live "needs your action" item for Amit/Neha.
-  await createDispatch({ materialId: cementBag.id, quantity: 500, sourceLocationId: baggedWarehouse.id, customerDestination: "Metro Hardware Distributors", createdByUserId: amit.id });
+  const disC = await createDispatch({ materialId: cementBag.id, quantity: 500, sourceLocationId: baggedWarehouse.id, customerDestination: "Metro Hardware Distributors", createdByUserId: amit.id });
 
   // DIS-D — CANCELLED before dispatch, no inventory impact.
   const disD = await createDispatch({ materialId: cementHe.id, quantity: 100, sourceLocationId: cementSilo3.id, customerDestination: "Coastal Infrastructure Projects", createdByUserId: neha.id });
@@ -353,6 +359,82 @@ async function main() {
   await consumptionHistory(cementGb.id, cementSilo2.id, "MT", "Packing Area");
   await consumptionHistory(cementHe.id, cementSilo3.id, "MT", "Packing Area");
   await consumptionHistory(cementBag.id, packingArea.id, "Nos", "Dispatch Loading", { dailyRatePct: 0.01 });
+
+  console.log("Seeding default Notification Rules — spec section 6's examples plus coverage of the remaining trigger library...");
+  async function rule(event: keyof typeof NOTIFICATION_EVENT_META, recipient: { recipientType: "ROLE" | "RELEVANT_USER"; recipientRole?: string }, channel: "IN_APP" | "EMAIL" | "BOTH") {
+    const meta = NOTIFICATION_EVENT_META[event];
+    await prisma.notificationRule.create({
+      data: {
+        event,
+        recipientType: recipient.recipientType,
+        recipientRole: recipient.recipientRole ?? null,
+        channel,
+        status: "ENABLED",
+        notificationType: meta.notificationType,
+        title: meta.defaultTitle,
+        message: meta.defaultMessage,
+      },
+    });
+  }
+  await rule("REQUEST_CREATED", { recipientType: "ROLE", recipientRole: "STORE_SUPERVISOR" }, "BOTH");
+  await rule("REQUEST_ACCEPTED", { recipientType: "RELEVANT_USER" }, "IN_APP");
+  await rule("REQUEST_REJECTED", { recipientType: "RELEVANT_USER" }, "IN_APP");
+  await rule("REQUEST_ASSIGNED", { recipientType: "RELEVANT_USER" }, "IN_APP");
+  await rule("REQUEST_DELIVERED", { recipientType: "RELEVANT_USER" }, "IN_APP");
+  await rule("REQUEST_NOT_RECEIVED", { recipientType: "RELEVANT_USER" }, "IN_APP");
+  await rule("DISPATCH_CREATED", { recipientType: "ROLE", recipientRole: "STORE_SUPERVISOR" }, "IN_APP");
+  await rule("DISPATCH_APPROVED", { recipientType: "RELEVANT_USER" }, "IN_APP");
+  await rule("STOCK_LOW", { recipientType: "ROLE", recipientRole: "INVENTORY_MANAGER" }, "IN_APP");
+  await rule("STOCK_CRITICAL", { recipientType: "ROLE", recipientRole: "INVENTORY_MANAGER" }, "BOTH");
+  await rule("QUALITY_RELEASED", { recipientType: "ROLE", recipientRole: "INVENTORY_MANAGER" }, "IN_APP");
+  // Admin has full-access bypass everywhere else in this app (accept/route/assign/confirm on
+  // any record, regardless of ownership) — mirror that here with its own rules on the two
+  // highest-priority events, rather than folding it into the Inventory Manager/Store Supervisor
+  // rules above (which stay single-audience, matching the spec's one-rule-one-recipient model;
+  // the engine already loops over every ENABLED rule for an event, so a second rule targeting a
+  // different role is how "also notify X" is expressed without touching the first rule).
+  await rule("REQUEST_CREATED", { recipientType: "ROLE", recipientRole: "ADMIN" }, "IN_APP");
+  await rule("STOCK_CRITICAL", { recipientType: "ROLE", recipientRole: "ADMIN" }, "IN_APP");
+
+  console.log("Seeding a handful of example Notifications so the bell/notification centre isn't empty on first look...");
+  // The requests/dispatches above were created by calling the lib functions directly (same as
+  // every other seed section), not through src/app/actions.ts — so they don't generate
+  // Notification rows on their own the way a real in-app action would. These calls replicate
+  // exactly what the matching actions.ts hook sends, using the SAME triggerNotification/
+  // checkStockThresholds engine (no hand-crafted rows) against a representative slice of what
+  // was just seeded, so every role has at least one real, in-app-visible example to look at.
+  function requestNotifyCtx(r: { id: string; materialId: string; quantityRequested: number; requestNumber: string; requestedByUserId: string; assignedToUserId: string | null; routedToUserId: string | null }) {
+    return { recordId: r.id, materialId: r.materialId, quantity: r.quantityRequested, reference: r.requestNumber, requestedByUserId: r.requestedByUserId, assignedToUserId: r.assignedToUserId ?? undefined, routedToUserId: r.routedToUserId ?? undefined, link: `/requests/${r.id}` };
+  }
+  function dispatchNotifyCtx(d: { id: string; materialId: string; quantity: number; dispatchReference: string; createdByUserId: string; assignedToUserId: string | null }) {
+    return { recordId: d.id, materialId: d.materialId, quantity: d.quantity, reference: d.dispatchReference, createdByUserId: d.createdByUserId, assignedToUserId: d.assignedToUserId ?? undefined, link: `/movements/dispatches/${d.id}` };
+  }
+  // Several of the requests/dispatches above went through further lifecycle calls after
+  // creation (assignOperator, routeToSupervisor, approveDispatch, ...) whose return values
+  // were discarded, same as every other seed section — re-fetch current state here rather
+  // than reuse the stale creation-time object, or fields like assignedToUserId/routedToUserId
+  // would still read null and RELEVANT_USER resolution would silently find no one.
+  const [freshReq5, freshReq6, freshReq7, freshReq8, freshReq9, freshReq10, freshDisB, freshDisC] = await Promise.all([
+    prisma.stockRequest.findUniqueOrThrow({ where: { id: req5.id } }),
+    prisma.stockRequest.findUniqueOrThrow({ where: { id: req6.id } }),
+    prisma.stockRequest.findUniqueOrThrow({ where: { id: req7.id } }),
+    prisma.stockRequest.findUniqueOrThrow({ where: { id: req8.id } }),
+    prisma.stockRequest.findUniqueOrThrow({ where: { id: req9.id } }),
+    prisma.stockRequest.findUniqueOrThrow({ where: { id: req10.id } }),
+    prisma.dispatch.findUniqueOrThrow({ where: { id: disB.id } }),
+    prisma.dispatch.findUniqueOrThrow({ where: { id: disC.id } }),
+  ]);
+  await triggerNotification("REQUEST_CREATED", requestNotifyCtx(freshReq7)); // urgent, needs Amit's action
+  await triggerNotification("REQUEST_ACCEPTED", requestNotifyCtx(freshReq8)); // Priya's request was accepted
+  await triggerNotification("REQUEST_ASSIGNED", requestNotifyCtx(freshReq9)); // assigned to Suresh
+  await triggerNotification("REQUEST_DELIVERED", requestNotifyCtx(freshReq10)); // Priya needs to confirm receipt
+  await triggerNotification("REQUEST_REJECTED", requestNotifyCtx(freshReq5)); // Rahul's alt-fuel request was rejected
+  await triggerNotification("REQUEST_NOT_RECEIVED", requestNotifyCtx(freshReq6)); // Amit's exception queue
+  await triggerNotification("DISPATCH_CREATED", dispatchNotifyCtx(freshDisC)); // needs Amit's approval
+  await triggerNotification("DISPATCH_APPROVED", dispatchNotifyCtx(freshDisB)); // assigned to Suresh
+  await triggerNotification("QUALITY_RELEASED", { recordId: sand.id, materialId: sand.id, locationId: maintenanceStore.id, quantity: 25, link: `/inventory/${sand.id}` }); // the hold-then-release cycle seeded above
+  await checkStockThresholds(altFuel.id); // already seeded critically low -> fires STOCK_CRITICAL to Neha
+  await checkStockThresholds(cementHe.id); // already seeded below minimum -> fires STOCK_LOW to Neha
 
   console.log("Seed complete.");
 }

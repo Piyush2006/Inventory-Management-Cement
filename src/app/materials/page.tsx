@@ -1,11 +1,13 @@
 import { prisma } from "@/lib/db";
 import { Panel } from "@/components/ui";
-import { getCurrentUser, restrictToRequestsOnly } from "@/lib/auth";
-import { MASTER_DATA_ROLES, IN_TRANSIT_LOCATION_TYPE, type UserRole } from "@/lib/domain/enums";
+import { getCurrentUser } from "@/lib/auth";
+import { MASTER_DATA_ROLES, IN_TRANSIT_LOCATION_TYPE, ROLE_LABELS, type UserRole } from "@/lib/domain/enums";
 import { MaterialsManager } from "./materials-manager";
 
 export const dynamic = "force-dynamic";
 
+// No restrictToRequestsOnly gate — Indentor (Requester) has full read access; edit controls
+// stay behind canManage/MASTER_DATA_ROLES exactly as before, unaffected by this.
 export default async function MaterialsPage() {
   const [materials, locations, currentUser] = await Promise.all([
     prisma.material.findMany({ orderBy: { name: "asc" } }),
@@ -13,7 +15,6 @@ export default async function MaterialsPage() {
     prisma.location.findMany({ where: { type: { not: IN_TRANSIT_LOCATION_TYPE } }, orderBy: { name: "asc" } }),
     getCurrentUser(),
   ]);
-  restrictToRequestsOnly(currentUser);
   const canManage = MASTER_DATA_ROLES.includes(currentUser.role as UserRole);
 
   return (
@@ -26,7 +27,7 @@ export default async function MaterialsPage() {
         </p>
         {!canManage && (
           <p className="mt-2 text-xs text-muted-soft">
-            Your role ({currentUser.role}) has view-only access here — managing materials requires Inventory Manager or Admin.
+            Your role ({ROLE_LABELS[currentUser.role as UserRole]}) has view-only access here — managing materials requires Inventory Manager or Admin.
           </p>
         )}
       </div>

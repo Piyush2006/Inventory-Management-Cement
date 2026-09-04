@@ -108,8 +108,12 @@ export type DispatchEventAction = (typeof DISPATCH_EVENT_ACTIONS)[number];
 export const USER_ROLES = ["REQUESTER", "STORE_SUPERVISOR", "STORE_OPERATOR", "INVENTORY_MANAGER", "ADMIN"] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
+// The internal role key stays "REQUESTER" everywhere in code/DB (no migration, no risk to the
+// dozens of existing role checks) — only the user-facing label changes. "Indentor" is the
+// standard industry term for production/operations staff who raise a material indent against
+// the store, matching this app's own "REQ-"/request terminology and its Indian-plant setting.
 export const ROLE_LABELS: Record<UserRole, string> = {
-  REQUESTER: "Requester (Production/Operations)",
+  REQUESTER: "Indentor",
   STORE_SUPERVISOR: "Store Supervisor",
   STORE_OPERATOR: "Store / Delivery Operator",
   INVENTORY_MANAGER: "Inventory Manager",
@@ -154,3 +158,22 @@ export const DISPATCH_APPROVE_ROLES: UserRole[] = ["STORE_SUPERVISOR", "INVENTOR
 // generalized to two unrestricted roles instead of one.
 export const DISPATCH_EXECUTE_ROLES: UserRole[] = ["STORE_OPERATOR", "STORE_SUPERVISOR", "INVENTORY_MANAGER", "ADMIN"];
 export const DISPATCH_CANCEL_ROLES: UserRole[] = ["STORE_SUPERVISOR", "INVENTORY_MANAGER", "ADMIN"];
+
+// ---------------------------------------------------------------------------
+// Notifications — additive, sits on top of the workflows above. See src/lib/notifications/.
+// ---------------------------------------------------------------------------
+export const NOTIFICATION_RECIPIENT_TYPES = ["ROLE", "SPECIFIC_USER", "RELEVANT_USER"] as const;
+export type NotificationRecipientType = (typeof NOTIFICATION_RECIPIENT_TYPES)[number];
+
+export const NOTIFICATION_CHANNELS = ["IN_APP", "EMAIL", "BOTH"] as const;
+export type NotificationChannel = (typeof NOTIFICATION_CHANNELS)[number];
+
+export const NOTIFICATION_RULE_STATUSES = ["ENABLED", "DISABLED"] as const;
+export type NotificationRuleStatus = (typeof NOTIFICATION_RULE_STATUSES)[number];
+
+export const NOTIFICATION_TYPES = ["ACTION_REQUIRED", "INFORMATION"] as const;
+export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
+
+// Configuring notification rules reuses the same role set that already manages material/
+// location master data — no new notification-specific role.
+export const NOTIFICATION_CONFIG_ROLES: UserRole[] = MASTER_DATA_ROLES;

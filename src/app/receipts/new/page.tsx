@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { Panel } from "@/components/ui";
 import { getCurrentUser, restrictToRequestsOnly, restrictStockOperationsFromSupervisor } from "@/lib/auth";
-import { STOCK_OPS_ROLES, IN_TRANSIT_LOCATION_TYPE, type UserRole } from "@/lib/domain/enums";
+import { STOCK_OPS_ROLES, IN_TRANSIT_LOCATION_TYPE, ROLE_LABELS, type UserRole } from "@/lib/domain/enums";
 import { ReceiptForm } from "./receipt-form";
 
 export const dynamic = "force-dynamic";
@@ -33,7 +33,7 @@ export default async function NewReceiptPage({
       <Panel>
         {!canRecord ? (
           <p className="text-sm text-muted-soft">
-            Your role ({currentUser.role}) cannot receive material — this requires Store/Delivery Operator, Inventory Manager, or Admin.
+            Your role ({ROLE_LABELS[currentUser.role as UserRole]}) cannot receive material — this requires Store/Delivery Operator, Inventory Manager, or Admin.
           </p>
         ) : (
           <ReceiptForm

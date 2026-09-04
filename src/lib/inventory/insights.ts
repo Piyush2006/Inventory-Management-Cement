@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/db";
 import { IN_TRANSIT_LOCATION_TYPE } from "@/lib/domain/enums";
 import { formatQty, formatNumber, formatPct } from "@/lib/format";
+import { getTotalOnHand } from "@/lib/inventory/balance";
+import { getTotalQualityBalances } from "@/lib/inventory/quality";
 
 export type InsightType = "HIGH_RISK" | "QUALITY_HOLD_RISK" | "MEDIUM_RISK" | "CONSUMPTION_ANOMALY";
 
@@ -59,25 +61,47 @@ export function evaluateMaterialRisk(input: MaterialRiskInput): InventoryInsight
       : "";
 
   // Type 1 (highest priority): already at/below safety stock, or projected to cross it soon.
-  if (safetyStock != null && dailyRate > 1e-9) {
+  // "Already below" fires on the threshold alone, with or without consumption history — a
+  // material can be below safety stock the moment it's counted (e.g. seeded that way, or
+  // never yet consumed), and that fact doesn't stop being true just because there's no rate to
+  // project forward with. Only the *approaching* branch (not yet below, but will be soon) needs
+  // a real dailyRate, since projecting "when" requires a rate.
+  if (safetyStock != null) {
     const alreadyBelow = unrestricted <= safetyStock;
-    const daysUntilSafety = alreadyBelow ? 0 : (unrestricted - safetyStock) / dailyRate;
-    if (alreadyBelow || daysUntilSafety <= APPROACHING_SAFETY_STOCK_DAYS) {
+    if (alreadyBelow) {
       return {
         materialId,
         materialName,
         type: "HIGH_RISK",
         typeLabel: "High Inventory Risk",
-        explanation: alreadyBelow
+        explanation: dailyRate > 1e-9
           ? `Usable stock is ${formatQty(unrestricted, uom)}, already at or below the ${formatQty(safetyStock, uom)} safety stock level. Average consumption is ${formatQty(dailyRate, uom)}/day.${incomingNote}`
-          : `Usable stock is ${formatQty(unrestricted, uom)} with average consumption of ${formatQty(dailyRate, uom)}/day. This gives approximately ${formatNumber(daysCover!, 1)} days of cover, with safety stock at ${formatQty(safetyStock, uom)}. Stock is likely to reach safety stock in about ${daysUntilSafety < 1 ? "less than a day" : `${formatNumber(daysUntilSafety, 0)} day${daysUntilSafety >= 1.5 ? "s" : ""}`}.${incomingNote}`,
+          : `Usable stock is ${formatQty(unrestricted, uom)}, already at or below the ${formatQty(safetyStock, uom)} safety stock level. No recent consumption has been recorded, so a depletion rate can't be estimated.${incomingNote}`,
         metrics: [
           { label: "Usable Stock", value: formatQty(unrestricted, uom) },
-          { label: "Avg Consumption", value: `${formatQty(dailyRate, uom)}/day` },
+          { label: "Avg Consumption", value: dailyRate > 1e-9 ? `${formatQty(dailyRate, uom)}/day` : "No recent data" },
           { label: "Safety Stock", value: formatQty(safetyStock, uom) },
         ],
-        severity: alreadyBelow ? 1000 : 900 - daysUntilSafety * 10,
+        severity: 1000,
       };
+    }
+    if (dailyRate > 1e-9) {
+      const daysUntilSafety = (unrestricted - safetyStock) / dailyRate;
+      if (daysUntilSafety <= APPROACHING_SAFETY_STOCK_DAYS) {
+        return {
+          materialId,
+          materialName,
+          type: "HIGH_RISK",
+          typeLabel: "High Inventory Risk",
+          explanation: `Usable stock is ${formatQty(unrestricted, uom)} with average consumption of ${formatQty(dailyRate, uom)}/day. This gives approximately ${formatNumber(daysCover!, 1)} days of cover, with safety stock at ${formatQty(safetyStock, uom)}. Stock is likely to reach safety stock in about ${daysUntilSafety < 1 ? "less than a day" : `${formatNumber(daysUntilSafety, 0)} day${daysUntilSafety >= 1.5 ? "s" : ""}`}.${incomingNote}`,
+          metrics: [
+            { label: "Usable Stock", value: formatQty(unrestricted, uom) },
+            { label: "Avg Consumption", value: `${formatQty(dailyRate, uom)}/day` },
+            { label: "Safety Stock", value: formatQty(safetyStock, uom) },
+          ],
+          severity: 900 - daysUntilSafety * 10,
+        };
+      }
     }
   }
 
@@ -137,6 +161,64 @@ export function evaluateMaterialRisk(input: MaterialRiskInput): InventoryInsight
   }
 
   return null;
+}
+
+/**
+ * Builds the MaterialRiskInput for exactly one material, on demand — the single-material
+ * counterpart to getInventoryInsights()'s batched loop below (used there for the whole active
+ * catalog at once). Reuses the same single-material helpers the rest of the app already has for
+ * on-hand and QC Hold/Blocked (getTotalOnHand, getTotalQualityBalances) rather than re-deriving
+ * that math a second time. Exists so a "why is <material> critical" question (Bruce AI) can
+ * evaluate any material regardless of whether it made getInventoryInsights()'s top-5 cut.
+ */
+export async function getMaterialRiskInputs(materialId: string): Promise<MaterialRiskInput> {
+  const material = await prisma.material.findUniqueOrThrow({ where: { id: materialId } });
+
+  const since = new Date();
+  since.setDate(since.getDate() - TRAILING_WINDOW_DAYS);
+  since.setHours(0, 0, 0, 0);
+  const recentCutoff = new Date();
+  recentCutoff.setDate(recentCutoff.getDate() - RECENT_WINDOW_DAYS);
+
+  const [onHand, { qcHold, blocked }, consumptionTx, openPOs] = await Promise.all([
+    getTotalOnHand(materialId),
+    getTotalQualityBalances(materialId),
+    prisma.inventoryTransaction.findMany({
+      where: { materialId, transactionType: "CONSUMPTION", timestamp: { gte: since } },
+      select: { quantity: true, timestamp: true },
+    }),
+    prisma.purchaseReference.findMany({ where: { materialId, status: { in: ["EXPECTED", "PARTIALLY_RECEIVED"] } }, select: { orderedQuantity: true } }),
+  ]);
+
+  let total = 0;
+  let recentTotal = 0;
+  const distinctDays = new Set<string>();
+  for (const c of consumptionTx) {
+    total += c.quantity;
+    distinctDays.add(c.timestamp.toISOString().slice(0, 10));
+    if (c.timestamp >= recentCutoff) recentTotal += c.quantity;
+  }
+  const incomingQuantity = openPOs.reduce((s, po) => s + po.orderedQuantity, 0);
+
+  return {
+    materialId: material.id,
+    materialName: material.name,
+    uom: material.uom,
+    onHand,
+    qcHold,
+    blocked,
+    safetyStock: material.safetyStock ?? null,
+    dailyRate: total / TRAILING_WINDOW_DAYS,
+    recentDailyRate: recentTotal / RECENT_WINDOW_DAYS,
+    distinctConsumptionDays: distinctDays.size,
+    totalTrailingConsumption: total,
+    incomingQuantity,
+  };
+}
+
+/** "Why is `<material>` critical/high-risk" — null when the material has no risk signal at all (an honest "nothing concerning right now," not a forced explanation). */
+export async function getMaterialRiskExplanation(materialId: string): Promise<InventoryInsight | null> {
+  return evaluateMaterialRisk(await getMaterialRiskInputs(materialId));
 }
 
 /**

@@ -10,19 +10,23 @@ const NAV_ITEMS = [
   { href: "/inventory", label: "Inventory" },
   { href: "/requests", label: "Requests" },
   { href: "/movements", label: "Stock Operations" },
+  { href: "/reports", label: "Reports" },
+  { href: "/notifications", label: "Notifications" },
 ];
 
 export function Sidebar({ role }: { role: string }) {
   const pathname = usePathname();
-  // A Requester's whole surface is Requests — raise, view own, confirm/not-received.
-  // No Dashboard, Inventory, Locations, Materials, or Stock Operations menu at all.
-  // Store Supervisor now reaches Stock Operations too — solely for the Dispatch tab (see
+  // Indentor (Requester) now has full read access to every informational screen (Dashboard,
+  // Locations, Materials, Inventory, Requests, Reports) — only Stock Operations stays hidden,
+  // since that page is almost entirely write actions (Receive/Consume/Transfer/Adjustment/
+  // Dispatch) this role never performs; the Request lifecycle covers everything they raise or
+  // receive. Store Supervisor reaches Stock Operations too — solely for the Dispatch tab (see
   // movements/page.tsx); the Receive Material/Consume/Transfer/Adjustment tabs stay just as
   // inaccessible to them there as before, this only affects whether the menu item shows at all.
-  const items = role === "REQUESTER" ? NAV_ITEMS.filter((i) => i.href === "/requests") : NAV_ITEMS;
+  const items = role === "REQUESTER" ? NAV_ITEMS.filter((i) => i.href !== "/movements") : NAV_ITEMS;
   return (
     <nav className="flex h-full w-56 shrink-0 flex-col overflow-y-auto border-r border-border bg-surface px-3 py-4 scrollbar-thin">
-      <Link href={role === "REQUESTER" ? "/requests" : "/"} className="mb-5 flex items-center gap-2 px-2">
+      <Link href="/" className="mb-5 flex items-center gap-2 px-2">
         <span className="flex h-7 w-7 items-center justify-center rounded bg-accent-soft text-sm font-bold text-accent">B</span>
         <div className="leading-tight">
           <div className="text-sm font-semibold text-foreground">Berrima Cement Plant</div>

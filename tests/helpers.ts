@@ -39,11 +39,12 @@ export async function getBalance(materialId: string, locationId: string) {
   return row?.quantity ?? 0;
 }
 
-export async function makeUser(overrides: Partial<{ name: string; role: string }> = {}) {
+export async function makeUser(overrides: Partial<{ name: string; role: string; email: string }> = {}) {
   return prisma.user.create({
     data: {
       name: overrides.name ?? uid("User"),
       role: overrides.role ?? "REQUESTER",
+      email: overrides.email,
     },
   });
 }

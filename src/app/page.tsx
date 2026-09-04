@@ -4,14 +4,15 @@ import { getInventoryInsights } from "@/lib/inventory/insights";
 import { Panel, Th, Td, LinkPill } from "@/components/ui";
 import { StatusBadge } from "@/components/status-badge";
 import { TrendChart } from "@/components/charts/trend-chart";
-import { StatCard, NeedsAttentionPanel, RequestStatusPanel, StockWatchlistPanel, AiInsightsPanel } from "./dashboard-widgets";
+import { StatCard, NeedsAttentionPanel, RequestStatusPanel, StockWatchlistPanel, BruceInsightCard } from "./dashboard-widgets";
+import { BruceChat } from "@/components/bruce-chat";
 import { formatNumber, formatDateTime } from "@/lib/format";
-import { getCurrentUser, restrictToRequestsOnly } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
+// No restrictToRequestsOnly gate — every non-Requester-exclusive role, Indentor (Requester)
+// included, has full read access to the Dashboard. Nothing here is a write action.
 export default async function DashboardPage() {
-  restrictToRequestsOnly(await getCurrentUser());
   const [data, insightsResult] = await Promise.all([
     getDashboardData(),
     // Advisory-only: a failure here must never take down the rest of the Dashboard.
@@ -27,15 +28,15 @@ export default async function DashboardPage() {
         <p className="mt-1 text-sm text-muted">Overview of inventory, requests and exceptions.</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-        <StatCard icon="critical" tone="critical" label="Critical Stock" value={data.kpi.criticalCount} unit="Items" href="/inventory?status=CRITICAL" />
-        <StatCard icon="low" tone="warning" label="Low Stock" value={data.kpi.lowCount} unit="Items" href="/inventory?status=LOW" />
-        <StatCard icon="transit" tone="transit" label="In Transit" value={data.kpi.totalInTransitMt} unit="MT" href="/requests" />
-        <StatCard icon="requests" tone="healthy" label="Open Requests" value={data.kpi.openRequestsCount} unit="Requests" href="/requests" />
-        <StatCard icon="exception" tone="exception" label="Exceptions" value={data.kpi.exceptionsCount} unit="Items" href="/requests" />
-      </div>
-
-      <AiInsightsPanel insights={insightsResult.insights} hasConsumptionData={insightsResult.hasConsumptionData} unavailable={insightsResult.unavailable} />
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_380px] xl:items-start">
+        <div className="min-w-0 space-y-6">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+            <StatCard icon="critical" tone="critical" label="Critical Stock" value={data.kpi.criticalCount} unit="Items" href="/inventory?status=CRITICAL" />
+            <StatCard icon="low" tone="warning" label="Low Stock" value={data.kpi.lowCount} unit="Items" href="/inventory?status=LOW" />
+            <StatCard icon="transit" tone="transit" label="In Transit" value={data.kpi.totalInTransitMt} unit="MT" href="/requests" />
+            <StatCard icon="requests" tone="healthy" label="Open Requests" value={data.kpi.openRequestsCount} unit="Requests" href="/requests" />
+            <StatCard icon="exception" tone="exception" label="Exceptions" value={data.kpi.exceptionsCount} unit="Items" href="/requests" />
+          </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Panel title="Inventory Trend (14 days)">
@@ -148,6 +149,13 @@ export default async function DashboardPage() {
           </table>
         </div>
       </Panel>
+        </div>
+
+        <div className="space-y-4 xl:sticky xl:top-6">
+          <BruceInsightCard insights={insightsResult.insights} hasConsumptionData={insightsResult.hasConsumptionData} unavailable={insightsResult.unavailable} />
+          <BruceChat />
+        </div>
+      </div>
     </div>
   );
 }

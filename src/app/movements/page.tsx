@@ -11,6 +11,7 @@ import {
   DISPATCH_CANCEL_ROLES,
   DEFAULT_TOLERANCE_PCT,
   IN_TRANSIT_LOCATION_TYPE,
+  ROLE_LABELS,
   type UserRole,
 } from "@/lib/domain/enums";
 import { MovementTabs } from "./movement-tabs";
@@ -176,7 +177,7 @@ export default async function StockOperationsPage() {
           </Suspense>
         ) : (
           <p className="text-sm text-muted-soft">
-            Your role ({currentUser.role}) cannot record stock operations — this requires Store/Delivery Operator, Inventory Manager, or Admin.
+            Your role ({ROLE_LABELS[currentUser.role as UserRole]}) cannot record stock operations — this requires Store/Delivery Operator, Inventory Manager, or Admin.
           </p>
         )}
       </Panel>

@@ -4,17 +4,17 @@ import { Panel, Th, Td, EmptyState } from "@/components/ui";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { formatNumber, formatDateTime } from "@/lib/format";
 import { TRANSACTION_TYPES } from "@/lib/domain/enums";
-import { getCurrentUser, restrictToRequestsOnly } from "@/lib/auth";
 import type { Prisma } from "@prisma/client";
 
 export const dynamic = "force-dynamic";
 
+// No restrictToRequestsOnly gate — Indentor (Requester) has full read access; this is a
+// read-only ledger view, no write action lives here.
 export default async function LedgerPage({
   searchParams,
 }: {
   searchParams: Promise<{ materialId?: string; type?: string; from?: string; to?: string }>;
 }) {
-  restrictToRequestsOnly(await getCurrentUser());
   const params = await searchParams;
   const materials = await prisma.material.findMany({ orderBy: { name: "asc" } });
 

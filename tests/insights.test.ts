@@ -33,6 +33,18 @@ describe("evaluateMaterialRisk", () => {
     expect(insight?.explanation).toMatch(/already at or below/);
   });
 
+  it("flags High Inventory Risk when already below safety stock even with zero recorded consumption (dailyRate: 0)", () => {
+    // A material seeded critically low from day one, never yet consumed — classifyStockStatus
+    // (the plain threshold check) already calls this CRITICAL; evaluateMaterialRisk must not
+    // silently say nothing just because there's no rate to project a days-until-safety-stock
+    // figure with. Regression test for a real contradiction Bruce AI's "why is X critical"
+    // surfaced: the material appeared in the Critical Stock list but got no explanation at all.
+    const insight = evaluateMaterialRisk(baseInput({ onHand: 80, safetyStock: 100, dailyRate: 0 }));
+    expect(insight?.type).toBe("HIGH_RISK");
+    expect(insight?.explanation).toMatch(/already at or below/);
+    expect(insight?.explanation).toMatch(/consumption.*recorded|can't be estimated/i);
+  });
+
   it("flags High Inventory Risk (approaching) when projected to cross safety stock within a week", () => {
     // 400 usable, 20/day -> reaches 300 safety stock in 5 days (<= 7-day threshold).
     const insight = evaluateMaterialRisk(baseInput({ onHand: 400, safetyStock: 300, dailyRate: 20 }));

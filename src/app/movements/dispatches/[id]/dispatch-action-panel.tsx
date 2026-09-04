@@ -143,7 +143,7 @@ export function DispatchActionPanel({
             >
               <input type="hidden" name="id" value={dispatchId} />
               <input name="reason" required placeholder="Cancellation reason (required)…" className="w-64 rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
-              <button type="submit" disabled={pending} className="rounded-md bg-[var(--status-critical)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40">
+              <button type="submit" disabled={pending} className="rounded-md bg-[var(--status-critical-solid)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40">
                 Confirm Cancel
               </button>
             </form>

@@ -33,7 +33,11 @@ import {
 } from "@/lib/inventory/dispatch";
 import { getCurrentUser, setCurrentUser, requireRole } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { ADJUSTMENT_ROLES, STOCK_OPS_ROLES, MASTER_DATA_ROLES, type TransactionType, type QualityStatus } from "@/lib/domain/enums";
+import { ADJUSTMENT_ROLES, STOCK_OPS_ROLES, MASTER_DATA_ROLES, NOTIFICATION_CONFIG_ROLES, type TransactionType, type QualityStatus } from "@/lib/domain/enums";
+import { triggerNotification } from "@/lib/notifications/engine";
+import { checkStockThresholds } from "@/lib/notifications/stockThreshold";
+import type { NotificationEvent } from "@/lib/notifications/events";
+import { answerBruceQuestion } from "@/lib/bruce/answer";
 
 function fail(message: string) {
   return { ok: false as const, error: message };
@@ -86,6 +90,7 @@ export async function actionRecordMovement(formData: FormData) {
       return fail(`${transactionType} is not handled by this form`);
     }
 
+    await checkStockThresholds(materialId);
     revalidateInventoryViews();
     revalidatePath("/movements");
     revalidatePath("/requests");
@@ -143,6 +148,7 @@ export async function actionRecordCountAndAdjust(formData: FormData) {
       if (!reason.trim()) return fail("A reason is required to post an adjustment");
       await postCountAdjustment({ physicalCountId: count.id, reason });
       adjusted = true;
+      await checkStockThresholds(materialId);
     }
     revalidateInventoryViews();
     revalidatePath("/movements");
@@ -159,7 +165,8 @@ export async function actionPostCountAdjustment(formData: FormData) {
     if (!physicalCountId || !reason.trim()) return fail("A reason is required to post an adjustment");
     const user = await getCurrentUser();
     requireRole(user, ADJUSTMENT_ROLES);
-    await postCountAdjustment({ physicalCountId, reason });
+    const tx = await postCountAdjustment({ physicalCountId, reason });
+    await checkStockThresholds(tx.materialId);
     revalidateInventoryViews();
     return ok();
   } catch (e) {
@@ -187,6 +194,7 @@ export async function actionPostAdjustment(formData: FormData) {
     // postAdjustment always bypasses the negative-balance guard — if this location had QC
     // Hold/Blocked stock, a large enough negative adjustment can drop On Hand below it.
     await reconcileQualityBalances(materialId, locationId);
+    await checkStockThresholds(materialId);
     revalidateInventoryViews();
     return ok();
   } catch (e) {
@@ -209,6 +217,12 @@ export async function actionChangeQualityStatus(formData: FormData) {
     if (toStatus !== "UNRESTRICTED" && !reason.trim()) return fail("A reason is required to hold or block stock");
 
     await changeQualityStatus({ materialId, locationId, quantity, fromStatus, toStatus, userId: user.id, reason: reason || undefined });
+    if (fromStatus === "QC_HOLD" && toStatus === "UNRESTRICTED") {
+      await triggerNotification("QUALITY_RELEASED", { recordId: materialId, materialId, locationId, quantity, link: `/inventory/${materialId}` });
+    }
+    // A hold/block can reduce Unrestricted stock enough to cross into Low/Critical even though
+    // On Hand hasn't changed — check regardless of direction, not just on release.
+    await checkStockThresholds(materialId);
     revalidateInventoryViews();
     revalidatePath(`/inventory/${materialId}`);
     return ok();
@@ -224,6 +238,30 @@ export async function actionChangeQualityStatus(formData: FormData) {
 function revalidateRequestViews() {
   revalidatePath("/requests");
   revalidateInventoryViews();
+}
+
+// Shared notification context builder for every Request lifecycle hook below — `updated` is
+// always the bare record `prisma.stockRequest.update()` returns, whose scalar FKs are exactly
+// what triggerNotification's RELEVANT_USER resolvers need (see src/lib/notifications/recipients.ts).
+function requestNotificationContext(updated: {
+  id: string;
+  materialId: string;
+  quantityRequested: number;
+  requestNumber: string;
+  requestedByUserId: string;
+  assignedToUserId: string | null;
+  routedToUserId: string | null;
+}) {
+  return {
+    recordId: updated.id,
+    materialId: updated.materialId,
+    quantity: updated.quantityRequested,
+    reference: updated.requestNumber,
+    requestedByUserId: updated.requestedByUserId,
+    assignedToUserId: updated.assignedToUserId ?? undefined,
+    routedToUserId: updated.routedToUserId ?? undefined,
+    link: `/requests/${updated.id}`,
+  };
 }
 
 export async function actionSetCurrentUser(formData: FormData) {
@@ -251,7 +289,8 @@ export async function actionCreateStockRequest(formData: FormData) {
       return fail("Missing required fields");
     }
     const user = await getCurrentUser();
-    await createStockRequest({ materialId, quantityRequested, requiredByDate, priority, reason, note, fromLocationId, toLocationId, requestedByUserId: user.id });
+    const request = await createStockRequest({ materialId, quantityRequested, requiredByDate, priority, reason, note, fromLocationId, toLocationId, requestedByUserId: user.id });
+    await triggerNotification("REQUEST_CREATED", requestNotificationContext(request));
     revalidateRequestViews();
     return ok();
   } catch (e) {
@@ -263,7 +302,8 @@ export async function actionAcceptStockRequest(formData: FormData) {
   try {
     const id = String(formData.get("id"));
     const user = await getCurrentUser();
-    await acceptStockRequest(id, user.id);
+    const updated = await acceptStockRequest(id, user.id);
+    await triggerNotification("REQUEST_ACCEPTED", requestNotificationContext(updated));
     revalidateRequestViews();
     return ok();
   } catch (e) {
@@ -277,7 +317,8 @@ export async function actionRejectStockRequest(formData: FormData) {
     const reason = String(formData.get("reason") || "");
     if (!reason.trim()) return fail("A rejection reason is required");
     const user = await getCurrentUser();
-    await rejectStockRequest(id, user.id, reason);
+    const updated = await rejectStockRequest(id, user.id, reason);
+    await triggerNotification("REQUEST_REJECTED", requestNotificationContext(updated));
     revalidateRequestViews();
     return ok();
   } catch (e) {
@@ -305,7 +346,8 @@ export async function actionAssignOperator(formData: FormData) {
     const operatorUserId = String(formData.get("operatorUserId"));
     if (!id || !operatorUserId) return fail("Choose an operator to assign");
     const user = await getCurrentUser();
-    await assignOperator(id, operatorUserId, user.id);
+    const updated = await assignOperator(id, operatorUserId, user.id);
+    await triggerNotification("REQUEST_ASSIGNED", requestNotificationContext(updated));
     revalidateRequestViews();
     return ok();
   } catch (e) {
@@ -317,7 +359,9 @@ export async function actionStartDelivery(formData: FormData) {
   try {
     const id = String(formData.get("id"));
     const user = await getCurrentUser();
-    await startDelivery(id, user.id);
+    const updated = await startDelivery(id, user.id);
+    await triggerNotification("DELIVERY_STARTED", requestNotificationContext(updated));
+    await checkStockThresholds(updated.materialId);
     revalidateRequestViews();
     return ok();
   } catch (e) {
@@ -330,7 +374,8 @@ export async function actionMarkDelivered(formData: FormData) {
     const id = String(formData.get("id"));
     const deliveryNote = formData.get("deliveryNote") ? String(formData.get("deliveryNote")) : undefined;
     const user = await getCurrentUser();
-    await markDelivered(id, user.id, deliveryNote);
+    const updated = await markDelivered(id, user.id, deliveryNote);
+    await triggerNotification("REQUEST_DELIVERED", requestNotificationContext(updated));
     revalidateRequestViews();
     return ok();
   } catch (e) {
@@ -345,7 +390,9 @@ export async function actionConfirmReceipt(formData: FormData) {
     const note = formData.get("note") ? String(formData.get("note")) : undefined;
     if (!id || Number.isNaN(quantity) || quantity <= 0) return fail("Missing required fields");
     const user = await getCurrentUser();
-    await confirmReceipt(id, quantity, user.id, note);
+    const updated = await confirmReceipt(id, quantity, user.id, note);
+    await triggerNotification(updated.status === "COMPLETED" ? "REQUEST_RECEIVED" : "REQUEST_PARTIALLY_RECEIVED", requestNotificationContext(updated));
+    await checkStockThresholds(updated.materialId);
     revalidateRequestViews();
     return ok();
   } catch (e) {
@@ -359,7 +406,8 @@ export async function actionMarkNotReceived(formData: FormData) {
     const reason = String(formData.get("reason") || "");
     if (!reason.trim()) return fail("A reason is required");
     const user = await getCurrentUser();
-    await markNotReceived(id, user.id, reason);
+    const updated = await markNotReceived(id, user.id, reason);
+    await triggerNotification("REQUEST_NOT_RECEIVED", requestNotificationContext(updated));
     revalidateRequestViews();
     return ok();
   } catch (e) {
@@ -554,6 +602,7 @@ export async function actionCreateMaterialReceipt(formData: FormData) {
         ? await createMaterialReceipt({ ...input, supplierId: supplier.id })
         : await createAndPostMaterialReceipt({ ...input, supplierId: supplier.id }, user.id);
 
+    if (mode !== "draft") await checkStockThresholds(receipt.materialId);
     revalidateProcurementViews();
     return ok({ receiptId: receipt.id, grnNumber: receipt.grnNumber, status: receipt.status });
   } catch (e) {
@@ -566,7 +615,8 @@ export async function actionPostMaterialReceipt(formData: FormData) {
     const user = await getCurrentUser();
     requireRole(user, STOCK_OPS_ROLES);
     const id = String(formData.get("id"));
-    await postMaterialReceipt(id, user.id);
+    const receipt = await postMaterialReceipt(id, user.id);
+    await checkStockThresholds(receipt.materialId);
     revalidateProcurementViews();
     return ok();
   } catch (e) {
@@ -598,6 +648,18 @@ function revalidateDispatchViews() {
   revalidatePath("/movements");
 }
 
+function dispatchNotificationContext(updated: { id: string; materialId: string; quantity: number; dispatchReference: string; createdByUserId: string; assignedToUserId: string | null }) {
+  return {
+    recordId: updated.id,
+    materialId: updated.materialId,
+    quantity: updated.quantity,
+    reference: updated.dispatchReference,
+    createdByUserId: updated.createdByUserId,
+    assignedToUserId: updated.assignedToUserId ?? undefined,
+    link: `/movements/dispatches/${updated.id}`,
+  };
+}
+
 export async function actionCreateDispatch(formData: FormData) {
   try {
     const user = await getCurrentUser();
@@ -618,6 +680,7 @@ export async function actionCreateDispatch(formData: FormData) {
       notes: formData.get("notes") ? String(formData.get("notes")) : undefined,
       createdByUserId: user.id,
     });
+    await triggerNotification("DISPATCH_CREATED", dispatchNotificationContext(dispatch));
     revalidatePath("/movements");
     return ok({ dispatchId: dispatch.id, dispatchReference: dispatch.dispatchReference });
   } catch (e) {
@@ -631,7 +694,8 @@ export async function actionApproveDispatch(formData: FormData) {
     const operatorUserId = String(formData.get("operatorUserId"));
     if (!id || !operatorUserId) return fail("Choose an operator to assign");
     const user = await getCurrentUser();
-    await approveDispatch(id, operatorUserId, user.id);
+    const updated = await approveDispatch(id, operatorUserId, user.id);
+    await triggerNotification("DISPATCH_APPROVED", dispatchNotificationContext(updated));
     revalidateDispatchViews();
     return ok();
   } catch (e) {
@@ -669,7 +733,9 @@ export async function actionMarkDispatched(formData: FormData) {
   try {
     const id = String(formData.get("id"));
     const user = await getCurrentUser();
-    await markDispatched(id, user.id);
+    const updated = await markDispatched(id, user.id);
+    await triggerNotification("DISPATCH_DISPATCHED", dispatchNotificationContext(updated));
+    await checkStockThresholds(updated.materialId);
     revalidateDispatchViews();
     return ok();
   } catch (e) {
@@ -683,10 +749,127 @@ export async function actionCancelDispatch(formData: FormData) {
     const reason = String(formData.get("reason") || "");
     if (!reason.trim()) return fail("A reason is required to cancel a dispatch");
     const user = await getCurrentUser();
-    await cancelDispatch(id, user.id, reason);
+    const updated = await cancelDispatch(id, user.id, reason);
+    await triggerNotification("DISPATCH_CANCELLED", dispatchNotificationContext(updated));
     revalidatePath("/movements");
     return ok();
   } catch (e) {
     return fail(e instanceof Error ? e.message : "Failed to cancel dispatch");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Notifications — notification centre (read/unread) + rule configuration
+// ---------------------------------------------------------------------------
+
+export async function actionMarkNotificationRead(formData: FormData) {
+  try {
+    const id = String(formData.get("id"));
+    const user = await getCurrentUser();
+    // Scoped to the caller's own notifications in the `where` — not just a hidden UI check.
+    await prisma.notification.updateMany({ where: { id, recipientUserId: user.id }, data: { read: true, readAt: new Date() } });
+    revalidatePath("/notifications");
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to mark notification read");
+  }
+}
+
+export async function actionMarkAllNotificationsRead() {
+  try {
+    const user = await getCurrentUser();
+    await prisma.notification.updateMany({ where: { recipientUserId: user.id, read: false }, data: { read: true, readAt: new Date() } });
+    revalidatePath("/notifications");
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to mark all notifications read");
+  }
+}
+
+function ruleInputFromForm(formData: FormData) {
+  const event = String(formData.get("event") || "") as NotificationEvent;
+  const recipientType = String(formData.get("recipientType") || "");
+  const recipientRole = formData.get("recipientRole") ? String(formData.get("recipientRole")) : null;
+  const recipientUserId = formData.get("recipientUserId") ? String(formData.get("recipientUserId")) : null;
+  const channel = String(formData.get("channel") || "");
+  const notificationType = String(formData.get("notificationType") || "");
+  const title = String(formData.get("title") || "").trim();
+  const message = String(formData.get("message") || "").trim();
+  return { event, recipientType, recipientRole, recipientUserId, channel, notificationType, title, message };
+}
+
+export async function actionCreateNotificationRule(formData: FormData) {
+  try {
+    const user = await getCurrentUser();
+    requireRole(user, NOTIFICATION_CONFIG_ROLES);
+    const input = ruleInputFromForm(formData);
+    if (!input.event || !input.recipientType || !input.channel || !input.notificationType || !input.title || !input.message) return fail("Missing required fields");
+    if (input.recipientType === "ROLE" && !input.recipientRole) return fail("Choose a role");
+    if (input.recipientType === "SPECIFIC_USER" && !input.recipientUserId) return fail("Choose a user");
+    await prisma.notificationRule.create({ data: { ...input, status: "ENABLED" } });
+    revalidatePath("/notifications");
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to create rule");
+  }
+}
+
+export async function actionUpdateNotificationRule(formData: FormData) {
+  try {
+    const user = await getCurrentUser();
+    requireRole(user, NOTIFICATION_CONFIG_ROLES);
+    const id = String(formData.get("id"));
+    const input = ruleInputFromForm(formData);
+    if (!id || !input.event || !input.recipientType || !input.channel || !input.notificationType || !input.title || !input.message) return fail("Missing required fields");
+    if (input.recipientType === "ROLE" && !input.recipientRole) return fail("Choose a role");
+    if (input.recipientType === "SPECIFIC_USER" && !input.recipientUserId) return fail("Choose a user");
+    await prisma.notificationRule.update({ where: { id }, data: input });
+    revalidatePath("/notifications");
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to update rule");
+  }
+}
+
+export async function actionToggleNotificationRule(formData: FormData) {
+  try {
+    const user = await getCurrentUser();
+    requireRole(user, NOTIFICATION_CONFIG_ROLES);
+    const id = String(formData.get("id"));
+    const status = String(formData.get("status")) as "ENABLED" | "DISABLED";
+    await prisma.notificationRule.update({ where: { id }, data: { status } });
+    revalidatePath("/notifications");
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to update rule status");
+  }
+}
+
+export async function actionDeleteNotificationRule(formData: FormData) {
+  try {
+    const user = await getCurrentUser();
+    requireRole(user, NOTIFICATION_CONFIG_ROLES);
+    const id = String(formData.get("id"));
+    await prisma.notificationRule.delete({ where: { id } });
+    revalidatePath("/notifications");
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to delete rule");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bruce AI — read-only advisory Q&A over existing data. No revalidatePath: nothing is written.
+// ---------------------------------------------------------------------------
+
+export async function actionAskBruce(formData: FormData) {
+  try {
+    const question = String(formData.get("question") || "").trim();
+    if (!question) return fail("Ask Bruce AI a question first");
+    const user = await getCurrentUser();
+    const answer = await answerBruceQuestion(question, { id: user.id, role: user.role });
+    return ok({ text: answer.text, links: answer.links ?? [] });
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Bruce AI is temporarily unavailable");
   }
 }

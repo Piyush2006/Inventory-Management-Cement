@@ -5,17 +5,21 @@ import { Panel, Th, Td, LinkPill, EmptyState } from "@/components/ui";
 import { StatusBadge } from "@/components/status-badge";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { formatNumber } from "@/lib/format";
-import { MATERIAL_CATEGORIES, STOCK_STATUSES, IN_TRANSIT_LOCATION_TYPE } from "@/lib/domain/enums";
-import { getCurrentUser, restrictToRequestsOnly } from "@/lib/auth";
+import { MATERIAL_CATEGORIES, STOCK_STATUSES, IN_TRANSIT_LOCATION_TYPE, STOCK_OPS_ROLES, type UserRole } from "@/lib/domain/enums";
+import { getCurrentUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
+// No restrictToRequestsOnly gate — Indentor (Requester) has full read access; the "+ Receive
+// Material" action button below is separately gated to STOCK_OPS_ROLES so a role that can't
+// reach /receipts/new (still write-gated) isn't shown a dead-end link.
 export default async function InventoryPage({
   searchParams,
 }: {
   searchParams: Promise<{ q?: string; category?: string; locationId?: string; status?: string }>;
 }) {
-  restrictToRequestsOnly(await getCurrentUser());
+  const currentUser = await getCurrentUser();
+  const canReceiveMaterial = STOCK_OPS_ROLES.includes(currentUser.role as UserRole);
   const params = await searchParams;
   const [materials, locations] = await Promise.all([
     prisma.material.findMany({
@@ -67,9 +71,11 @@ export default async function InventoryPage({
           <h1 className="text-lg font-semibold text-foreground">Inventory</h1>
           <p className="mt-1 text-sm text-muted">What do we have, and where? Every figure is derived from the movement ledger.</p>
         </div>
-        <Link href="/receipts/new" className="shrink-0 rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground">
-          + Receive Material
-        </Link>
+        {canReceiveMaterial && (
+          <Link href="/receipts/new" className="shrink-0 rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground">
+            + Receive Material
+          </Link>
+        )}
       </div>
 
       <Panel>

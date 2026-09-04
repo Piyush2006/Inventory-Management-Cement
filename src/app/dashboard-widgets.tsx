@@ -96,14 +96,20 @@ export function NeedsAttentionPanel({ items }: { items: AttentionItem[] }) {
   );
 }
 
-const INSIGHT_TONE: Record<InsightType, Tone> = {
-  HIGH_RISK: "critical",
-  QUALITY_HOLD_RISK: "exception",
-  MEDIUM_RISK: "warning",
-  CONSUMPTION_ANOMALY: "transit",
+const INSIGHT_DOT: Record<InsightType, string> = {
+  HIGH_RISK: "bg-[var(--status-critical)]",
+  QUALITY_HOLD_RISK: "bg-[var(--status-exception)]",
+  MEDIUM_RISK: "bg-[var(--status-warning)]",
+  CONSUMPTION_ANOMALY: "bg-[var(--status-transit)]",
 };
 
-export function AiInsightsPanel({
+/**
+ * The Dashboard's Bruce AI insight card — same getInventoryInsights() data the earlier AI
+ * Inventory Insights feature already computed (no new risk logic), restyled compact enough for
+ * a narrow sidebar rail per the Bruce AI wireframe, and rebranded (the user-facing AI name must
+ * be "Bruce AI", not "AI Inventory Insights").
+ */
+export function BruceInsightCard({
   insights,
   hasConsumptionData,
   unavailable,
@@ -113,42 +119,42 @@ export function AiInsightsPanel({
   unavailable: boolean;
 }) {
   return (
-    <Panel title="✨ AI Inventory Insights">
+    <div className="shadow-panel rounded-lg border border-border bg-surface p-4">
+      <div className="flex items-center gap-2">
+        <span className="text-base">✨</span>
+        <span className="text-sm font-semibold text-foreground">Bruce AI</span>
+        <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-medium text-accent">Beta</span>
+      </div>
+      <p className="mt-0.5 text-xs text-muted-soft">Inventory Copilot</p>
+
       {unavailable ? (
-        <p className="text-sm text-muted-soft">AI insights are temporarily unavailable.</p>
+        <p className="mt-3 text-sm text-muted-soft">Bruce AI is temporarily unavailable.</p>
       ) : insights.length === 0 ? (
-        <p className="text-sm text-muted-soft">
+        <p className="mt-3 text-sm text-muted-soft">
           {hasConsumptionData ? "No significant inventory risks detected." : "Insufficient consumption data to estimate risk."}
         </p>
       ) : (
-        <div className="space-y-2.5">
-          {insights.map((ins) => {
-            const s = TONE_STYLES[INSIGHT_TONE[ins.type]];
-            return (
-              <div key={`${ins.materialId}-${ins.type}`} className={`rounded-md ${s.badgeBg} p-3`}>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="truncate text-sm font-medium text-foreground">{ins.materialName}</span>
-                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${s.badgeFg} ${s.badgeBg} border border-border-soft`}>{ins.typeLabel}</span>
-                  </div>
-                  <Link href={`/inventory/${ins.materialId}`} className="shrink-0 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground hover:border-accent/50">
-                    View Details →
-                  </Link>
-                </div>
-                <p className="mt-1.5 text-xs text-muted">{ins.explanation}</p>
-                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-soft">
-                  {ins.metrics.map((met) => (
-                    <span key={met.label}>
-                      {met.label}: <span className="text-foreground">{met.value}</span>
-                    </span>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <>
+          <p className="mt-3 text-xs font-medium text-muted">{insights.length} thing{insights.length === 1 ? "" : "s"} need attention today</p>
+          <div className="mt-2 space-y-1">
+            {insights.map((ins) => (
+              <Link
+                key={`${ins.materialId}-${ins.type}`}
+                href={`/inventory/${ins.materialId}`}
+                className="group flex items-start gap-2 rounded-md px-1.5 py-1.5 hover:bg-surface-raised"
+              >
+                <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${INSIGHT_DOT[ins.type]}`} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-medium text-foreground">{ins.materialName} — {ins.typeLabel}</span>
+                  <span className="block truncate text-[11px] text-muted-soft">{ins.metrics[0] ? `${ins.metrics[0].label}: ${ins.metrics[0].value}` : ins.explanation}</span>
+                </span>
+                <span className="shrink-0 text-muted-soft group-hover:text-accent">›</span>
+              </Link>
+            ))}
+          </div>
+        </>
       )}
-    </Panel>
+    </div>
   );
 }
 

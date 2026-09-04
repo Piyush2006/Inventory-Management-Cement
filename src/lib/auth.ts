@@ -38,10 +38,14 @@ export function requireRole(user: { role: string; name: string }, allowed: UserR
 }
 
 /**
- * A Requester's entire surface is Requests (raise, view own, confirm/not-received) —
- * no Dashboard, Inventory, Locations, Materials, or Stock Operations. Call at the top
- * of every page outside /requests so a Requester can't reach it even by typing the URL,
- * not just by not seeing it in the sidebar.
+ * Indentor (Requester, role key unchanged in code/DB — only the display label changed) has
+ * full read access to every informational screen (Dashboard, Inventory, Locations, Materials,
+ * Reports, Ledger) — this gate is now only called from the pages that stay write-only for this
+ * role: Stock Operations, GRN receiving, and the Dispatch detail page. None of those are
+ * something a production requisitioner performs; their own Request lifecycle (raise, view own,
+ * confirm/not-received) plus read access everywhere else covers what they need. Call at the top
+ * of any such page so this role can't reach it even by typing the URL, not just by not seeing
+ * it in the sidebar.
  */
 export function restrictToRequestsOnly(user: { role: string }) {
   if (user.role === "REQUESTER") redirect("/requests");

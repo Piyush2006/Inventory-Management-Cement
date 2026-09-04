@@ -54,7 +54,7 @@ export function ReceiptActions({ id, status }: { id: string; status: string }) {
         >
           <input type="hidden" name="id" value={id} />
           <input name="reason" required placeholder="Reason (required)…" className="w-56 rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
-          <button type="submit" disabled={pending} className="rounded-md bg-[var(--status-critical)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40">
+          <button type="submit" disabled={pending} className="rounded-md bg-[var(--status-critical-solid)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40">
             {pending ? "Cancelling…" : "Confirm Cancellation"}
           </button>
         </form>

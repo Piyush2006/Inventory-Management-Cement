@@ -98,7 +98,7 @@ export function RequestActionPanel({
         >
           <input type="hidden" name="id" value={requestId} />
           <input name="reason" required placeholder="Rejection reason (required)…" className="w-64 rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
-          <button type="submit" disabled={pending} className="rounded-md bg-[var(--status-critical)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40">
+          <button type="submit" disabled={pending} className="rounded-md bg-[var(--status-critical-solid)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40">
             Confirm Reject
           </button>
         </form>
@@ -218,7 +218,7 @@ export function RequestActionPanel({
             >
               <input type="hidden" name="id" value={requestId} />
               <input name="reason" required placeholder="Reason material was not received (required)…" className="w-72 rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
-              <button type="submit" disabled={pending} className="rounded-md bg-[var(--status-critical)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40">
+              <button type="submit" disabled={pending} className="rounded-md bg-[var(--status-critical-solid)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40">
                 Confirm Not Received
               </button>
             </form>

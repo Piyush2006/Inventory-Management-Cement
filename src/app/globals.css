@@ -35,6 +35,13 @@
   --status-exception-bg: rgba(131, 57, 201, 0.1);
   --status-unknown: #5b6472;
   --status-unknown-bg: rgba(91, 100, 114, 0.1);
+
+  /* Deliberately the SAME value in every theme block below (not derived from --status-critical,
+     which is intentionally lighter in dark mode for badge/text legibility on a dark surface).
+     A solid destructive-button fill needs to stay dark enough for white text at ~4.5:1+ in both
+     themes; reusing --status-critical for that purpose measured 4.35:1 in light mode but only
+     3.22:1 in dark mode (WCAG fail) — this token exists for exactly that button case. */
+  --status-critical-solid: #c62828;
 }
 
 @media (prefers-color-scheme: dark) {

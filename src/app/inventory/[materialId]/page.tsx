@@ -9,15 +9,18 @@ import { Panel, KpiTile, Th, Td, EmptyState, LinkPill } from "@/components/ui";
 import { StatusBadge, RequestStatusBadge } from "@/components/status-badge";
 import { QualityPanel } from "./quality-panel";
 import { formatNumber, formatDateTime, formatDate } from "@/lib/format";
-import { getCurrentUser, restrictToRequestsOnly } from "@/lib/auth";
+import { getCurrentUser } from "@/lib/auth";
 import { ADJUSTMENT_ROLES, type UserRole } from "@/lib/domain/enums";
 
 export const dynamic = "force-dynamic";
 
+// No restrictToRequestsOnly gate — Indentor (Requester) has full read access. The "Stock
+// Operations" pill below is hidden for them specifically since /movements stays write-gated
+// (not part of this role's expanded read access) — no dead-end link.
 export default async function MaterialDetailPage({ params }: { params: Promise<{ materialId: string }> }) {
   const currentUser = await getCurrentUser();
-  restrictToRequestsOnly(currentUser);
   const canManageQuality = ADJUSTMENT_ROLES.includes(currentUser.role as UserRole);
+  const canReachStockOperations = currentUser.role !== "REQUESTER";
   const { materialId } = await params;
   const material = await prisma.material.findUnique({ where: { id: materialId } });
   if (!material) notFound();
@@ -70,7 +73,7 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
           </p>
         </div>
         <div className="flex gap-2">
-          <LinkPill href={`/movements?materialId=${material.id}`}>Stock Operations</LinkPill>
+          {canReachStockOperations && <LinkPill href={`/movements?materialId=${material.id}`}>Stock Operations</LinkPill>}
           <LinkPill href={`/requests?materialId=${material.id}`}>Request Stock</LinkPill>
         </div>
       </div>
