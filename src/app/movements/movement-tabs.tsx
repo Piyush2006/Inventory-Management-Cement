@@ -1,15 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { MovementForm, LEDGER_MOVEMENT_TYPES } from "./movement-form";
 import { CountAdjustForm } from "./count-adjust-form";
 import { ReceiveMaterialPanel } from "./receive-material-panel";
 import { DispatchPanel } from "./dispatch-panel";
 import { PendingCountsPanel } from "./pending-counts-panel";
 import { SpareReturnPanel } from "./spare-return-panel";
+import { Modal } from "@/components/modal";
 import { Th, Td, EmptyState } from "@/components/ui";
 import { formatNumber, formatDateTime } from "@/lib/format";
-import type { TransactionType } from "@/lib/domain/enums";
 
 type Material = { id: string; name: string; uom: string };
 type Location = { id: string; name: string };
@@ -33,13 +32,12 @@ type PendingCount = {
 };
 type SpareRequestOption = { id: string; requestNumber: string; materialId: string; issued: number; alreadyReturned: number };
 type SpareReturnRow = {
-  id: string; returnReference: string; originalIssueReference: string; materialName: string; uom: string; quantity: number;
-  returnedBy: string; condition: string; locationName: string; processedByName: string; createdAt: Date;
+  id: string; returnReference: string; originalIssueReference: string; materialId: string; materialName: string; uom: string; quantity: number;
+  status: string; returnedBy: string; reportedByName: string; reason: string | null; condition: string | null; locationName: string | null; processedByName: string | null; createdAt: Date;
 };
 
-const TABS: { key: TransactionType | "RECEIVE" | "ADJUSTMENT" | "DISPATCH" | "SPARE_RETURN"; label: string }[] = [
+const TABS: { key: "RECEIVE" | "ADJUSTMENT" | "DISPATCH" | "SPARE_RETURN"; label: string }[] = [
   { key: "RECEIVE", label: "Receive Material" },
-  ...LEDGER_MOVEMENT_TYPES.map((t) => ({ key: t.type, label: t.label })),
   { key: "ADJUSTMENT", label: "Adjustment" },
   { key: "DISPATCH", label: "Dispatch" },
   { key: "SPARE_RETURN", label: "Spare Return" },
@@ -87,11 +85,12 @@ export function MovementTabs({
   receipts,
   suppliers,
   canRecord,
+  canRecordAdjustment,
+  canCompleteSpareReturn,
+  canViewSpareReturns,
   dispatches,
   canCreateDispatch,
   canAccessDispatch,
-  consumptionMovements,
-  transferMovements,
   adjustmentMovements,
   pendingCounts,
   canApprove,
@@ -105,11 +104,12 @@ export function MovementTabs({
   receipts: Receipt[];
   suppliers: { id: string; name: string }[];
   canRecord: boolean;
+  canRecordAdjustment: boolean;
+  canCompleteSpareReturn: boolean;
+  canViewSpareReturns: boolean;
   dispatches: DispatchRow[];
   canCreateDispatch: boolean;
   canAccessDispatch: boolean;
-  consumptionMovements: MovementRow[];
-  transferMovements: MovementRow[];
   adjustmentMovements: MovementRow[];
   pendingCounts: PendingCount[];
   canApprove: boolean;
@@ -117,10 +117,14 @@ export function MovementTabs({
   spareRequests: SpareRequestOption[];
   spareReturns: SpareReturnRow[];
 }) {
-  // Store Supervisor reaches this page now solely for Dispatch — the other tabs stay hidden for
-  // anyone canRecord doesn't cover, same as before this feature existed.
-  const visibleTabs = TABS.filter((t) => (t.key === "DISPATCH" ? canAccessDispatch : canRecord));
+  // Store Supervisor reaches this page now solely for Dispatch, plus the Adjustment tab's
+  // physical-count step and read-only Spare Return monitoring — Receive Material stays hidden
+  // for anyone canRecord doesn't cover.
+  const visibleTabs = TABS.filter((t) =>
+    t.key === "DISPATCH" ? canAccessDispatch : t.key === "ADJUSTMENT" ? canRecordAdjustment : t.key === "SPARE_RETURN" ? canViewSpareReturns : canRecord
+  );
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>(visibleTabs[0]?.key ?? "DISPATCH");
+  const [formOpen, setFormOpen] = useState(false);
 
   return (
     <div className="space-y-4">
@@ -129,7 +133,7 @@ export function MovementTabs({
           <button
             key={t.key}
             type="button"
-            onClick={() => setTab(t.key)}
+            onClick={() => { setTab(t.key); setFormOpen(false); }}
             className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
               tab === t.key ? "border-accent bg-accent-soft text-accent" : "border-border text-muted hover:text-foreground"
             }`}
@@ -143,11 +147,20 @@ export function MovementTabs({
         <ReceiveMaterialPanel receipts={receipts} canRecord={canRecord} materials={materials} suppliers={suppliers} />
       ) : tab === "ADJUSTMENT" ? (
         <div key="adjustment" className="space-y-6">
-          <CountAdjustForm balances={balances} />
-          {canApprove && pendingCounts.length > 0 && (
+          <div className="flex justify-end">
+            <button type="button" onClick={() => setFormOpen(true)} className="btn btn-primary btn-sm">
+              + Record Count &amp; Adjustment
+            </button>
+          </div>
+          <Modal open={formOpen} onClose={() => setFormOpen(false)} title="Record Count &amp; Adjustment">
+            <CountAdjustForm balances={balances} />
+          </Modal>
+          {pendingCounts.length > 0 && (
             <div>
-              <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">Pending Approval ({pendingCounts.length})</h3>
-              <PendingCountsPanel counts={pendingCounts} />
+              <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
+                Pending Approval ({pendingCounts.length}){!canApprove && " — view only"}
+              </h3>
+              <PendingCountsPanel counts={pendingCounts} canApprove={canApprove} />
             </div>
           )}
           <div>
@@ -157,21 +170,14 @@ export function MovementTabs({
         </div>
       ) : tab === "DISPATCH" ? (
         <DispatchPanel dispatches={dispatches} materials={materials} locations={locations} balances={balances} canCreate={canCreateDispatch} />
-      ) : tab === "SPARE_RETURN" ? (
-        <SpareReturnPanel materials={spareMaterials} locations={locations} requests={spareRequests} returns={spareReturns} />
       ) : (
-        <div key={tab} className="space-y-6">
-          <MovementForm type={tab} materials={materials} locations={locations} />
-          <div>
-            <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
-              Recent {tab === "CONSUMPTION" ? "Consumption" : "Transfers"}
-            </h3>
-            <RecentMovementsList
-              rows={tab === "CONSUMPTION" ? consumptionMovements : transferMovements}
-              emptyLabel={tab === "CONSUMPTION" ? "No consumption recorded yet" : "No transfers recorded yet"}
-            />
-          </div>
-        </div>
+        <SpareReturnPanel
+          materials={spareMaterials}
+          locations={locations}
+          requests={spareRequests}
+          returns={spareReturns}
+          canComplete={canCompleteSpareReturn}
+        />
       )}
     </div>
   );

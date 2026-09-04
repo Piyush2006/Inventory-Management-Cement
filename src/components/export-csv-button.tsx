@@ -35,7 +35,7 @@ export function ExportCsvButton({
       type="button"
       onClick={handleExport}
       disabled={rows.length === 0}
-      className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted hover:border-accent/50 hover:text-foreground disabled:opacity-40"
+      className="btn btn-secondary btn-xs"
     >
       Export CSV
     </button>

@@ -40,7 +40,7 @@ export function ReceiveMaterialPanel({
       </p>
       {canRecord && (
         <div className="flex flex-wrap items-center gap-2">
-          <Link href="/receipts/new" className="inline-flex rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground">
+          <Link href="/receipts/new" className="btn btn-primary btn-md">
             + Receive Material
           </Link>
           <NewPoForm materials={materials} suppliers={suppliers} />

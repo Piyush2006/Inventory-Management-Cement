@@ -160,8 +160,8 @@ export function ReportFilterBar({
           </label>
         )}
         <div className="col-span-2 flex items-end gap-2 sm:col-span-4">
-          <button type="submit" className="rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground">Apply</button>
-          <Link href={`/reports?tab=${tab}`} className="rounded-md border border-border px-4 py-1.5 text-sm text-muted hover:text-foreground">Reset</Link>
+          <button type="submit" className="btn btn-primary btn-sm">Apply</button>
+          <Link href={`/reports?tab=${tab}`} className="btn btn-secondary btn-sm">Reset</Link>
         </div>
       </form>
     </Panel>

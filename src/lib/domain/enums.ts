@@ -25,6 +25,11 @@ export type RequestType = (typeof REQUEST_TYPES)[number];
 export const RETURN_CONDITIONS = ["UNUSED", "SERVICEABLE", "DAMAGED", "FOR_INSPECTION"] as const;
 export type ReturnCondition = (typeof RETURN_CONDITIONS)[number];
 
+// A Spare Return is reported (no inventory effect) before it's completed (posts the ledger
+// entry) — see src/lib/inventory/spareReturn.ts.
+export const SPARE_RETURN_STATUSES = ["REPORTED", "COMPLETED"] as const;
+export type SpareReturnStatus = (typeof SPARE_RETURN_STATUSES)[number];
+
 export const TRANSACTION_TYPES = [
   "RECEIPT",
   "CONSUMPTION",
@@ -159,13 +164,35 @@ export const ASSIGN_ROLES: UserRole[] = ["STORE_SUPERVISOR", "ADMIN"];
 // Start Delivery / Mark Delivered — but only by the specific operator this request is assigned to,
 // or Admin (checked separately against request.assignedToUserId, not just role membership).
 export const OPERATOR_ROLES: UserRole[] = ["STORE_OPERATOR", "ADMIN"];
-// Record Stock Operations (Receive Material / Consume / Transfer / Adjustment). Store Supervisor does
-// NOT get this — their job is managing the request queue, not touching stock directly.
+// Record Stock Operations (Receive Material). Store Supervisor does NOT get this — their job
+// is managing the request queue, not touching stock directly. The Adjustment tab's
+// physical-count step is broader — see PHYSICAL_COUNT_ROLES below — because the Adjustment
+// workflow spec explicitly gives Store Supervisor a recording/reviewing role there, unlike
+// Receive Material which stays exactly as before. Manual Consume/Transfer entry was removed
+// from Stock Operations — stock now only moves via Receive, Adjustment, Dispatch, Spare
+// Return, or the Requests (Transfer & Issue) lifecycle itself.
 export const STOCK_OPS_ROLES: UserRole[] = ["STORE_OPERATOR", "INVENTORY_MANAGER", "ADMIN"];
-// Only the Inventory Manager (or Admin) approves stock adjustments — not Store Supervisor/Operator.
+// Record a physical count and submit any discrepancy for review (Adjustment workflow, step 1).
+// Store Supervisor gets this even though it doesn't get STOCK_OPS_ROLES — recording/reviewing a
+// count is explicitly part of its job in the Adjustment workflow, submitting stock movements
+// directly is not.
+export const PHYSICAL_COUNT_ROLES: UserRole[] = ["STORE_OPERATOR", "STORE_SUPERVISOR", "INVENTORY_MANAGER", "ADMIN"];
+// Only the Inventory Manager (or Admin) approves/rejects and posts stock adjustments — not
+// Store Supervisor/Operator, who can only get a count to this point, not past it.
 export const ADJUSTMENT_ROLES: UserRole[] = ["INVENTORY_MANAGER", "ADMIN"];
 // Only the Inventory Manager (or Admin) manages the material/location master data.
 export const MASTER_DATA_ROLES: UserRole[] = ["INVENTORY_MANAGER", "ADMIN"];
+
+// Spare Return — a Requester/Maintenance user reports a return (no inventory effect); a Store
+// Operator then completes it (chooses the receiving location + verified condition, which is
+// what actually posts the ledger entry). Inventory Manager/Store Supervisor can only view —
+// per spec neither approves or completes a normal return, so they're deliberately absent from
+// both role lists below, unlike the Adjustment/Receive/Dispatch workflows where they can act.
+export const SPARE_RETURN_REPORT_ROLES: UserRole[] = ["REQUESTER", "STORE_OPERATOR", "ADMIN"];
+export const SPARE_RETURN_COMPLETE_ROLES: UserRole[] = ["STORE_OPERATOR", "ADMIN"];
+// Everyone who can see the Spare Return tab in Stock Operations at all (recording or just
+// monitoring) — Store Supervisor/Inventory Manager are view-only there (no report/complete access).
+export const SPARE_RETURN_VIEW_ROLES: UserRole[] = ["STORE_OPERATOR", "STORE_SUPERVISOR", "INVENTORY_MANAGER", "ADMIN"];
 
 // Dispatch (customer/finished-goods dispatch) — deliberately grants Store Supervisor real
 // access here (create/approve/execute-unrestricted/cancel), unlike its bare "no access" on

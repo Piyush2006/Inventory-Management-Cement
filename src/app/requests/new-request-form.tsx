@@ -8,7 +8,17 @@ type Material = { id: string; name: string; uom: string };
 type SpareMaterial = { id: string; name: string; uom: string; equipmentRef: string | null };
 type Location = { id: string; name: string };
 
-export function NewRequestForm({ materials, spareMaterials, locations }: { materials: Material[]; spareMaterials: SpareMaterial[]; locations: Location[] }) {
+export function NewRequestForm({
+  materials,
+  spareMaterials,
+  locations,
+  onDone,
+}: {
+  materials: Material[];
+  spareMaterials: SpareMaterial[];
+  locations: Location[];
+  onDone: () => void;
+}) {
   const searchParams = useSearchParams();
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState<{ ok: boolean; error?: string } | null>(null);
@@ -34,6 +44,7 @@ export function NewRequestForm({ materials, spareMaterials, locations }: { mater
         startTransition(async () => {
           const res = await actionCreateStockRequest(fd);
           setResult(res);
+          if (res.ok) onDone();
         });
       }}
     >
@@ -165,11 +176,15 @@ export function NewRequestForm({ materials, spareMaterials, locations }: { mater
         </label>
       </div>
       {result && !result.ok && <div className="text-sm text-[var(--status-critical)]">{result.error}</div>}
-      {result && result.ok && <div className="text-sm text-[var(--status-healthy)]">Request raised.</div>}
-      <button type="submit" disabled={pending || sameLocation || (isSpare && spareMaterials.length === 0) || (!isTransfer && !issuedTo.trim())} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-40">
-        {pending ? "Raising…" : "New Stock Request"}
-      </button>
-      {isSpare && spareMaterials.length === 0 && <p className="text-xs text-muted-soft">No active spares in the master yet — add one under Spare Management → Spare Master.</p>}
+      <div className="flex gap-2">
+        <button type="submit" disabled={pending || sameLocation || (isSpare && spareMaterials.length === 0) || (!isTransfer && !issuedTo.trim())} className="btn btn-primary btn-md">
+          {pending ? "Raising…" : "New Stock Request"}
+        </button>
+        <button type="button" onClick={onDone} className="btn btn-secondary btn-md">
+          Cancel
+        </button>
+      </div>
+      {isSpare && spareMaterials.length === 0 && <p className="text-xs text-muted-soft">No active spares in the master yet — add one under Materials with Category set to Spare.</p>}
     </form>
   );
 }

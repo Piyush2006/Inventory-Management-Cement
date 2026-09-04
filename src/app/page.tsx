@@ -57,9 +57,8 @@ export default async function DashboardPage() {
               <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-border-soft">
                 <div className={`h-full rounded-full ${s.fillPct >= 90 ? "bg-[var(--status-critical)]" : s.fillPct >= 75 ? "bg-[var(--status-warning)]" : "bg-accent"}`} style={{ width: `${Math.min(100, s.fillPct)}%` }} />
               </div>
-              <div className="mt-1.5 flex justify-between text-[11px] text-muted-soft">
+              <div className="mt-1.5 text-[11px] text-muted-soft">
                 <span>{formatNumber(s.total)} / {formatNumber(s.location.capacity ?? 0)} MT</span>
-                <span>~{s.truckloadsRemaining} truckloads free</span>
               </div>
             </div>
           ))}

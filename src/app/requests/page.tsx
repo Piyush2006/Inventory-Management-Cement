@@ -3,8 +3,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { Panel, Th, EmptyState } from "@/components/ui";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { formatDate } from "@/lib/format";
-import { IN_TRANSIT_LOCATION_TYPE, ACCEPT_REJECT_ROLES, ROUTE_ROLES, ASSIGN_ROLES, OPEN_REQUEST_STATUSES, REQUEST_TYPES, type UserRole } from "@/lib/domain/enums";
-import { NewRequestForm } from "./new-request-form";
+import { IN_TRANSIT_LOCATION_TYPE, ACCEPT_REJECT_ROLES, ROUTE_ROLES, ASSIGN_ROLES, OPEN_REQUEST_STATUSES, type UserRole } from "@/lib/domain/enums";
 import { RequestTabs } from "./request-tabs";
 import { RequestListRow } from "./request-list-row";
 import type { Prisma } from "@prisma/client";
@@ -95,12 +94,7 @@ function RequestTable({
   );
 }
 
-export default async function RequestsPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ type?: string }>;
-}) {
-  const params = await searchParams;
+export default async function RequestsPage() {
   const [materials, spareMaterials, locations, supervisors, operators, currentUser] = await Promise.all([
     prisma.material.findMany({ where: { active: true, category: { not: "SPARE" } }, orderBy: { name: "asc" } }),
     prisma.material.findMany({ where: { active: true, category: "SPARE" }, orderBy: { name: "asc" } }),
@@ -134,10 +128,6 @@ export default async function RequestsPage({
     openWhere = { status: { in: OPEN_STATUSES } };
     historyWhere = { status: { in: CLOSED_STATUSES } };
   }
-  if (params.type) {
-    openWhere = { ...openWhere, requestType: params.type };
-    historyWhere = { ...historyWhere, requestType: params.type };
-  }
 
   const [openRows, historyRows] = await Promise.all([
     prisma.stockRequest.findMany({ where: openWhere, include, orderBy: { createdAt: "desc" }, take: 50 }),
@@ -147,34 +137,16 @@ export default async function RequestsPage({
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-lg font-semibold text-foreground">Requests</h1>
+        <h1 className="text-lg font-semibold text-foreground">Transfer &amp; Issue</h1>
       </div>
 
       <Panel>
-        <form className="grid grid-cols-2 gap-3 sm:grid-cols-4" method="GET">
-          <label className="text-xs text-muted">
-            Type
-            <select name="type" defaultValue={params.type ?? ""} className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
-              <option value="">All types</option>
-              {REQUEST_TYPES.map((t) => (
-                <option key={t} value={t}>{t === "SPARE" ? "Spare" : "Material"}</option>
-              ))}
-            </select>
-          </label>
-        </form>
-      </Panel>
-
-      <Panel>
         <RequestTabs
+          materials={materials.map((m) => ({ id: m.id, name: m.name, uom: m.uom }))}
+          spareMaterials={spareMaterials.map((m) => ({ id: m.id, name: m.name, uom: m.uom, equipmentRef: m.equipmentRef }))}
+          locations={locations.map((l) => ({ id: l.id, name: l.name }))}
           openContent={<RequestTable rows={openRows} emptyTitle="No open requests" currentUser={currentUser} supervisors={supervisors} operators={operators} exportFilename="requests-open.csv" />}
           historyContent={<RequestTable rows={historyRows} emptyTitle="No completed or rejected requests yet" currentUser={currentUser} supervisors={supervisors} operators={operators} exportFilename="requests-history.csv" />}
-          newRequestContent={
-            <NewRequestForm
-              materials={materials.map((m) => ({ id: m.id, name: m.name, uom: m.uom }))}
-              spareMaterials={spareMaterials.map((m) => ({ id: m.id, name: m.name, uom: m.uom, equipmentRef: m.equipmentRef }))}
-              locations={locations.map((l) => ({ id: l.id, name: l.name }))}
-            />
-          }
         />
       </Panel>
     </div>

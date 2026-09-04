@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Td } from "@/components/ui";
+import { Td, ViewIcon } from "@/components/ui";
 import { RequestStatusBadge } from "@/components/status-badge";
 import { formatNumber, formatDate } from "@/lib/format";
 import { RequestActionPanel } from "./[id]/request-action-panel";
@@ -87,8 +87,13 @@ export function RequestListRow({
                 {expanded ? "Close" : "Act →"}
               </button>
             )}
-            <Link href={`/requests/${id}`} className="text-xs text-muted hover:text-foreground">
-              Details
+            <Link
+              href={`/requests/${id}`}
+              title="View details"
+              aria-label={`View details for ${requestNumber}`}
+              className="inline-flex rounded p-1.5 text-muted hover:bg-surface-raised hover:text-accent"
+            >
+              <ViewIcon />
             </Link>
           </div>
         </Td>

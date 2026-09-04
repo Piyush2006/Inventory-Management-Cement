@@ -48,7 +48,7 @@ export async function RequestReportSection({
             filename="request-report.csv"
             headers={["Request ID", "Material", "Purpose", "Type", "Requested Qty", "Delivered Qty", "Received Qty", "Remaining Qty", "Status", "Requested By", "Assigned To", "Requested Date", "Accepted Date", "Assigned Date", "In Transit Date", "Delivered Date", "Completed Date"]}
             rows={report.rows.map((r) => [
-              r.requestNumber, r.materialName, r.purpose === "ISSUE" ? "Issue" : "Transfer", r.requestType === "SPARE" ? "Spare" : "Material", formatNumber(r.quantityRequested), formatNumber(r.deliveredQuantity), formatNumber(r.receivedQuantity), formatNumber(r.remainingQuantity),
+              r.requestNumber, r.materialName, r.purpose === "ISSUE" ? "Issue" : "Transfer", r.requestType === "SPARE" ? "Spare" : "Material", formatNumber(r.quantityRequested), formatNumber(r.deliveredQuantity), formatNumber(r.receivedQuantity), r.remainingQuantity != null ? formatNumber(r.remainingQuantity) : "",
               r.status, r.requestedByName, r.assignedToName ?? "",
               formatDate(r.requestedAt), r.acceptedAt ? formatDate(r.acceptedAt) : "", r.assignedAt ? formatDate(r.assignedAt) : "",
               r.inTransitAt ? formatDate(r.inTransitAt) : "", r.deliveredAt ? formatDate(r.deliveredAt) : "", r.completedAt ? formatDate(r.completedAt) : "",
@@ -92,7 +92,7 @@ export async function RequestReportSection({
                     <Td className="text-right tabular">{formatNumber(r.quantityRequested)} {r.uom}</Td>
                     <Td className="text-right tabular">{formatNumber(r.deliveredQuantity)} {r.uom}</Td>
                     <Td className="text-right tabular">{formatNumber(r.receivedQuantity)} {r.uom}</Td>
-                    <Td className="text-right tabular">{formatNumber(r.remainingQuantity)} {r.uom}</Td>
+                    <Td className="text-right tabular">{r.remainingQuantity != null ? `${formatNumber(r.remainingQuantity)} ${r.uom}` : "—"}</Td>
                     <Td className="text-xs text-muted">{r.status.replace("_", " ")}</Td>
                     <Td className="text-xs text-muted">{r.requestedByName}</Td>
                     <Td className="text-xs text-muted">{r.assignedToName ?? "—"}</Td>

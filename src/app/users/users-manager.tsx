@@ -151,7 +151,7 @@ export function UsersManager({ users, currentUserId }: { users: User[]; currentU
                     <td colSpan={5} className="bg-surface-raised px-3 py-3">
                       <form className="space-y-3" action={(fd) => { fd.set("id", u.id); submitEdit(fd, () => setEditingId(null)); }}>
                         <UserFields user={u} />
-                        <button type="submit" disabled={pending} className="rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground disabled:opacity-40">
+                        <button type="submit" disabled={pending} className="btn btn-primary btn-sm">
                           {pending ? "Saving…" : "Save Changes"}
                         </button>
                       </form>

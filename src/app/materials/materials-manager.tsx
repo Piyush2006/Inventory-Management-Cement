@@ -5,6 +5,7 @@ import { actionSaveMaterial, actionDeleteMaterial } from "@/app/actions";
 import { MATERIAL_CATEGORIES, SPARE_CRITICALITIES } from "@/lib/domain/enums";
 import { formatNumber } from "@/lib/format";
 import { EditIcon, DeleteIcon } from "@/components/ui";
+import { Modal } from "@/components/modal";
 
 type Material = {
   id: string; materialCode: string; name: string; category: string; uom: string;
@@ -148,23 +149,22 @@ export function MaterialsManager({ materials, locations, canEdit }: { materials:
           </select>
         </div>
         {canEdit && (
-          <button onClick={() => setAdding((v) => !v)} className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground">
-            {adding ? "Cancel" : "+ Add Material"}
+          <button onClick={() => setAdding(true)} className="btn btn-primary btn-xs">
+            + Add Material
           </button>
         )}
       </div>
 
-      {canEdit && adding && (
-        <form
-          className="space-y-3 rounded-md border border-accent/30 bg-accent-soft p-3"
-          action={(fd) => submit(fd, () => setAdding(false))}
-        >
-          <MaterialFields locations={locations} />
-          {error && <div className="text-sm text-[var(--status-critical)]">{error}</div>}
-          <button type="submit" disabled={pending} className="rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground disabled:opacity-40">
-            {pending ? "Saving…" : "Save Material"}
-          </button>
-        </form>
+      {canEdit && (
+        <Modal open={adding} onClose={() => setAdding(false)} title="Add Material">
+          <form className="space-y-3" action={(fd) => submit(fd, () => setAdding(false))}>
+            <MaterialFields locations={locations} />
+            {error && <div className="text-sm text-[var(--status-critical)]">{error}</div>}
+            <button type="submit" disabled={pending} className="btn btn-primary btn-sm">
+              {pending ? "Saving…" : "Save Material"}
+            </button>
+          </form>
+        </Modal>
       )}
 
       <div className="overflow-x-auto scrollbar-thin">
@@ -231,7 +231,7 @@ export function MaterialsManager({ materials, locations, canEdit }: { materials:
                         <input type="hidden" name="id" value={m.id} />
                         <MaterialFields material={m} locations={locations} />
                         {error && <div className="text-sm text-[var(--status-critical)]">{error}</div>}
-                        <button type="submit" disabled={pending} className="rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground disabled:opacity-40">
+                        <button type="submit" disabled={pending} className="btn btn-primary btn-sm">
                           {pending ? "Saving…" : "Save Changes"}
                         </button>
                       </form>

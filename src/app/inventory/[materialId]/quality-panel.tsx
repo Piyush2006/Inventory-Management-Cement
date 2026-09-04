@@ -120,7 +120,7 @@ function LocationQualityRow({ materialId, uom, loc, canManage }: { materialId: s
             type="button"
             onClick={submit}
             disabled={pending || !quantity || Number(quantity) <= 0 || Number(quantity) > fromAvailable + 1e-6 || (needsReason && !reason.trim())}
-            className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground disabled:opacity-40"
+            className="btn btn-primary btn-xs"
           >
             {pending ? "Saving…" : "Confirm"}
           </button>

@@ -71,7 +71,7 @@ export function DispatchActionPanel({
               ))}
             </select>
           </label>
-          <button type="submit" disabled={pending || operators.length === 0} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-40">
+          <button type="submit" disabled={pending || operators.length === 0} className="btn btn-primary btn-md">
             {pending ? "Approving…" : "Approve"}
           </button>
           {operators.length === 0 && <span className="text-xs text-[var(--status-critical)]">No active Store/Delivery Operators configured.</span>}
@@ -80,7 +80,7 @@ export function DispatchActionPanel({
 
       {canShowReassign && (
         <div className="space-y-2">
-          <button type="button" onClick={() => setShowReassign((v) => !v)} className="rounded-md border border-border px-3 py-1.5 text-xs text-muted hover:text-foreground">
+          <button type="button" onClick={() => setShowReassign((v) => !v)} className="btn btn-secondary btn-xs">
             {showReassign ? "Close" : "Reassign Operator"}
           </button>
           {showReassign && (
@@ -104,7 +104,7 @@ export function DispatchActionPanel({
                   ))}
                 </select>
               </label>
-              <button type="submit" disabled={pending} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-40">
+              <button type="submit" disabled={pending} className="btn btn-primary btn-md">
                 {pending ? "Reassigning…" : "Reassign"}
               </button>
             </form>
@@ -113,20 +113,20 @@ export function DispatchActionPanel({
       )}
 
       {canStartLoading && (
-        <button onClick={() => runSimple(actionStartDispatchLoading)} disabled={pending} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-40">
+        <button onClick={() => runSimple(actionStartDispatchLoading)} disabled={pending} className="btn btn-primary btn-md">
           {pending ? "Starting…" : "Start Loading"}
         </button>
       )}
 
       {canMarkDispatched && (
-        <button onClick={() => runSimple(actionMarkDispatched)} disabled={pending} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-40">
+        <button onClick={() => runSimple(actionMarkDispatched)} disabled={pending} className="btn btn-primary btn-md">
           {pending ? "Marking…" : "Mark Dispatched"}
         </button>
       )}
 
       {canShowCancel && (
         <div className="space-y-2">
-          <button type="button" onClick={() => setShowCancel((v) => !v)} className="rounded-md border border-border px-3 py-1.5 text-xs text-muted hover:text-foreground">
+          <button type="button" onClick={() => setShowCancel((v) => !v)} className="btn btn-secondary btn-xs">
             {showCancel ? "Close" : "Cancel Dispatch"}
           </button>
           {showCancel && (
@@ -143,7 +143,7 @@ export function DispatchActionPanel({
             >
               <input type="hidden" name="id" value={dispatchId} />
               <input name="reason" required placeholder="Cancellation reason (required)…" className="w-64 rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
-              <button type="submit" disabled={pending} className="rounded-md bg-[var(--status-critical-solid)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40">
+              <button type="submit" disabled={pending} className="btn btn-danger btn-sm">
                 Confirm Cancel
               </button>
             </form>

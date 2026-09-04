@@ -17,7 +17,7 @@ export async function Topbar() {
   ]);
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-surface px-5">
+    <header className="relative z-10 flex h-14 shrink-0 items-center justify-between border-b border-border bg-surface px-5 shadow-panel">
       <div className="text-xs text-muted-soft">{formatDate(new Date())} &middot; Boral Cement Plant</div>
       <div className="flex items-center gap-2">
         <NotificationBell

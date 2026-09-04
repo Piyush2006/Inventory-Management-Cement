@@ -4,8 +4,10 @@ import { getCurrentUser } from "@/lib/auth";
 import { Panel, KpiTile, Th, Td, EmptyState } from "@/components/ui";
 import { RequestStatusBadge } from "@/components/status-badge";
 import { formatNumber, formatDate, formatDateTime } from "@/lib/format";
-import { ACCEPT_REJECT_ROLES, ROUTE_ROLES, ASSIGN_ROLES, type UserRole } from "@/lib/domain/enums";
+import { ACCEPT_REJECT_ROLES, ROUTE_ROLES, ASSIGN_ROLES, SPARE_RETURN_REPORT_ROLES, type UserRole } from "@/lib/domain/enums";
+import { getIssuedRemainingForRequest } from "@/lib/inventory/spareReturn";
 import { RequestActionPanel } from "./request-action-panel";
+import { SpareReturnReportPanel } from "./spare-return-report-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -66,6 +68,18 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
   const isAssignedOperator = currentUser.id === request.assignedToUserId || currentUser.role === "ADMIN";
   const isRequester = currentUser.id === request.requestedByUserId || currentUser.role === "ADMIN";
 
+  // Spare Return: only on a request that's actually a spare issue with something delivered, and
+  // only for the requester who raised it (or Admin) — a Store Operator reports/completes through
+  // its own path in Stock Operations, not here.
+  const isSpareIssue = request.requestType === "SPARE" && request.purpose === "ISSUE" && request.deliveredQuantity > 0;
+  const canReportSpareReturn = isSpareIssue && isRequester && SPARE_RETURN_REPORT_ROLES.includes(currentUser.role as UserRole);
+  const [spareReturnRemaining, spareReturns] = canReportSpareReturn
+    ? await Promise.all([
+        getIssuedRemainingForRequest(request.id),
+        prisma.spareReturn.findMany({ where: { requestId: request.id }, orderBy: { createdAt: "desc" } }),
+      ])
+    : [null, []];
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
@@ -103,6 +117,18 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
           uom={request.material.uom}
         />
       </Panel>
+
+      {canReportSpareReturn && spareReturnRemaining && (
+        <Panel title="Spare Return">
+          <SpareReturnReportPanel
+            requestId={request.id}
+            remaining={spareReturnRemaining.remaining}
+            uom={request.material.uom}
+            defaultReturnedBy={currentUser.name}
+            returns={spareReturns.map((r) => ({ id: r.id, returnReference: r.returnReference, quantity: r.quantity, status: r.status, condition: r.condition, createdAt: r.createdAt }))}
+          />
+        </Panel>
+      )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Panel title="Request Information">

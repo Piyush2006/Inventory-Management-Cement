@@ -53,25 +53,29 @@ export function StatCard({
   );
 }
 
-const ATTENTION_ICON: Record<AttentionItem["kind"], keyof typeof ICON> = { critical: "critical", low: "low", exception: "exception" };
-const ATTENTION_TONE: Record<AttentionItem["kind"], Tone> = { critical: "critical", low: "warning", exception: "exception" };
+const ATTENTION_ICON: Record<AttentionItem["kind"], keyof typeof ICON> = { critical: "critical", low: "low" };
+const ATTENTION_TONE: Record<AttentionItem["kind"], Tone> = { critical: "critical", low: "warning" };
 
 export function NeedsAttentionPanel({ items }: { items: AttentionItem[] }) {
   if (items.length === 0) {
     return (
       <Panel title="Needs Attention">
-        <EmptyState title="Nothing needs attention" body="All materials healthy, no request exceptions open." />
+        <EmptyState title="Nothing needs attention" body="All materials are above their minimum stock." />
       </Panel>
     );
   }
   return (
-    <Panel title="Needs Attention" action={<Link href="/requests" className="text-xs text-accent hover:underline">View all →</Link>}>
+    <Panel title="Needs Attention" action={<Link href="/inventory" className="text-xs text-accent hover:underline">View all →</Link>}>
       <div className="space-y-2">
         {items.map((item, i) => {
           const s = TONE_STYLES[ATTENTION_TONE[item.kind]];
           return (
-            <div key={`${item.kind}-${i}`} className={`flex items-center justify-between gap-3 rounded-md ${s.badgeBg} px-3 py-2.5`}>
-              <div className="flex items-center gap-3 min-w-0">
+            // flex-1 on the title block absorbs all the variable-length content (title/subtitle,
+            // stock figures) so the badge and View button — both fixed-width columns — always
+            // land in the same horizontal position from row to row, instead of drifting with
+            // justify-between's surplus-space redistribution.
+            <div key={`${item.kind}-${i}`} className={`flex items-center gap-3 rounded-md ${s.badgeBg} px-3 py-2.5`}>
+              <div className="flex min-w-0 flex-1 items-center gap-3">
                 <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${s.badgeBg} border border-border-soft`}>
                   <Image src={ICON[ATTENTION_ICON[item.kind]]} alt="" width={16} height={16} />
                 </div>
@@ -80,11 +84,11 @@ export function NeedsAttentionPanel({ items }: { items: AttentionItem[] }) {
                   <div className="truncate text-xs text-muted-soft">{item.subtitle}</div>
                 </div>
               </div>
-              <div className="hidden shrink-0 text-right sm:block">
-                <div className="text-sm text-foreground">{item.line1}</div>
-                <div className="text-xs text-muted-soft">{item.line2}</div>
+              <div className="hidden w-36 shrink-0 text-right sm:block">
+                <div className="truncate text-sm text-foreground">{item.line1}</div>
+                <div className="truncate text-xs text-muted-soft">{item.line2}</div>
               </div>
-              <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${s.badgeFg} ${s.badgeBg}`}>{item.badgeLabel}</span>
+              <span className={`w-20 shrink-0 rounded-full px-2.5 py-1 text-center text-xs font-medium ${s.badgeFg} ${s.badgeBg}`}>{item.badgeLabel}</span>
               <Link href={item.href} className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:border-accent/50">
                 View
               </Link>

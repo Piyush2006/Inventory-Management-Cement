@@ -206,7 +206,7 @@ export function ReceiptForm({
         <button type="submit" formAction={(fd) => submit(fd, "draft")} disabled={pending || !!quantityError} className="rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground hover:border-accent/50 disabled:opacity-40">
           {pending ? "Saving…" : "Save as Draft"}
         </button>
-        <button type="submit" formAction={(fd) => submit(fd, "post")} disabled={pending || !!quantityError} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-40">
+        <button type="submit" formAction={(fd) => submit(fd, "post")} disabled={pending || !!quantityError} className="btn btn-primary btn-md">
           {pending ? "Posting…" : "Post GRN"}
         </button>
         <span className="text-xs text-muted-soft">A draft never changes stock — only posting does.</span>

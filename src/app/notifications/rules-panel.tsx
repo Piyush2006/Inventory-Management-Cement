@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { Th, Td, EmptyState } from "@/components/ui";
+import { Modal } from "@/components/modal";
 import {
   actionCreateNotificationRule,
   actionUpdateNotificationRule,
@@ -45,7 +46,10 @@ function RuleForm({ rule, users, onDone }: { rule: Partial<RuleRow> | null; user
 
   return (
     <form
-      className="grid grid-cols-1 gap-3 rounded-md border border-border-soft bg-surface-raised p-3 sm:grid-cols-2"
+      // No box styling in the create case — that instance now sits inside a Modal, which
+      // already provides the border/background; the inline edit-row case still needs it since
+      // its own <td> wrapper has none.
+      className={`grid grid-cols-1 gap-3 sm:grid-cols-2 ${rule ? "rounded-md border border-border-soft bg-surface-raised p-3" : ""}`}
       action={(fd) => {
         setError(null);
         if (rule?.id) fd.set("id", rule.id);
@@ -134,10 +138,10 @@ function RuleForm({ rule, users, onDone }: { rule: Partial<RuleRow> | null; user
       {error && <div className="text-sm text-[var(--status-critical)] sm:col-span-2">{error}</div>}
 
       <div className="flex gap-2 sm:col-span-2">
-        <button type="submit" disabled={pending} className="rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground disabled:opacity-40">
+        <button type="submit" disabled={pending} className="btn btn-primary btn-sm">
           {pending ? "Saving…" : "Save"}
         </button>
-        <button type="button" onClick={onDone} className="rounded-md border border-border px-4 py-1.5 text-sm text-muted hover:text-foreground">
+        <button type="button" onClick={onDone} className="btn btn-secondary btn-sm">
           Cancel
         </button>
       </div>
@@ -165,11 +169,13 @@ export function RulesPanel({ rules, users }: { rules: RuleRow[]; users: { id: st
   return (
     <div className="space-y-3">
       <div className="flex justify-end">
-        <button type="button" onClick={() => setCreating((v) => !v)} className="rounded-md border border-border px-3 py-1.5 text-sm text-muted hover:text-foreground">
-          {creating ? "Close" : "+ New Rule"}
+        <button type="button" onClick={() => setCreating(true)} className="btn btn-secondary btn-sm">
+          + New Rule
         </button>
       </div>
-      {creating && <RuleForm rule={null} users={users} onDone={() => setCreating(false)} />}
+      <Modal open={creating} onClose={() => setCreating(false)} title="New Notification Rule">
+        <RuleForm rule={null} users={users} onDone={() => setCreating(false)} />
+      </Modal>
 
       {rules.length === 0 ? (
         <EmptyState title="No notification rules yet" />

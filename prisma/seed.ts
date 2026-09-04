@@ -19,7 +19,7 @@ import { createDispatch, approveDispatch, startDispatchLoading, markDispatched, 
 import { NOTIFICATION_EVENT_META } from "../src/lib/notifications/events";
 import { triggerNotification } from "../src/lib/notifications/engine";
 import { checkStockThresholds } from "../src/lib/notifications/stockThreshold";
-import { postSpareReturn } from "../src/lib/inventory/spareReturn";
+import { postSpareReturn, reportSpareReturn } from "../src/lib/inventory/spareReturn";
 
 async function main() {
   await ensureSqliteTuned();
@@ -68,12 +68,12 @@ async function main() {
   const kiln = await loc("Kiln", "PRODUCTION_AREA");
 
   console.log("Creating users...");
-  const rahul = await prisma.user.create({ data: { name: "Rahul", role: "REQUESTER" } });
-  const priya = await prisma.user.create({ data: { name: "Priya", role: "REQUESTER" } });
-  const amit = await prisma.user.create({ data: { name: "Amit", role: "STORE_SUPERVISOR" } });
-  const suresh = await prisma.user.create({ data: { name: "Suresh", role: "STORE_OPERATOR" } });
-  const neha = await prisma.user.create({ data: { name: "Neha", role: "INVENTORY_MANAGER" } });
-  await prisma.user.create({ data: { name: "John", role: "ADMIN" } });
+  const rahul = await prisma.user.create({ data: { name: "Rahul", role: "REQUESTER", email: "rahul@boralcement.com" } });
+  const priya = await prisma.user.create({ data: { name: "Priya", role: "REQUESTER", email: "priya@boralcement.com" } });
+  const amit = await prisma.user.create({ data: { name: "Amit", role: "STORE_SUPERVISOR", email: "amit@boralcement.com" } });
+  const suresh = await prisma.user.create({ data: { name: "Suresh", role: "STORE_OPERATOR", email: "suresh@boralcement.com" } });
+  const neha = await prisma.user.create({ data: { name: "Neha", role: "INVENTORY_MANAGER", email: "neha@boralcement.com" } });
+  await prisma.user.create({ data: { name: "John", role: "ADMIN", email: "john@boralcement.com" } });
 
   console.log("Creating materials...");
   async function mat(input: {
@@ -206,7 +206,11 @@ async function main() {
   }
   const ironBalance = await prisma.inventoryBalance.findUnique({ where: { materialId_locationId: { materialId: ironCorrective.id, locationId: maintenanceStore.id } } });
   await recordPhysicalCount({ locationId: maintenanceStore.id, materialId: ironCorrective.id, countedQuantity: Math.round((ironBalance?.quantity ?? 500) * 0.82), countedBy: "Suresh", note: "Monthly maintenance store count — noticeable shortfall, flagged for review" });
-  // Left unposted deliberately — this is what populates the "Pending Physical Counts" approval queue for Neha/Admin.
+  // A second one left pending too — one to approve, one to reject, so both sides of the
+  // Inventory Manager's review are demoable without recording a fresh count first.
+  const sandBalance = await prisma.inventoryBalance.findUnique({ where: { materialId_locationId: { materialId: sand.id, locationId: maintenanceStore.id } } });
+  await recordPhysicalCount({ locationId: maintenanceStore.id, materialId: sand.id, countedQuantity: Math.round((sandBalance?.quantity ?? 200) + 5), countedBy: "Suresh", note: "Routine monthly count — small overage, likely a rounding/weighment variance" });
+  // Both left unposted deliberately — this is what populates the "Pending Physical Counts" approval queue for Neha/Admin.
 
   console.log("Seeding the Requests lifecycle — every role, every status...");
 
@@ -321,6 +325,13 @@ async function main() {
   const disD = await createDispatch({ materialId: cementHe.id, quantity: 100, sourceLocationId: cementSilo3.id, customerDestination: "Coastal Infrastructure Projects", createdByUserId: neha.id });
   await cancelDispatch(disD.id, neha.id, "Customer postponed pickup indefinitely");
 
+  // DIS-E — LOADING: approved and loading under way, not yet dispatched — the one status the
+  // other four rows don't cover, so "Start Loading" and "Mark Dispatched" both have something
+  // to demo without walking a fresh dispatch through CREATED/APPROVED first.
+  const disE = await createDispatch({ materialId: cementHe.id, quantity: 80, sourceLocationId: cementSilo3.id, customerDestination: "Highway Concrete Solutions", createdByUserId: amit.id });
+  await approveDispatch(disE.id, suresh.id, amit.id);
+  await startDispatchLoading(disE.id, suresh.id);
+
   console.log("Seeding the external Receive Material (GRN) demo — separate from the internal request lifecycle...");
   const abcMinerals = await resolveSupplier({ name: "ABC Minerals" });
   const po = await createPurchaseReference({ supplierId: abcMinerals.id, materialId: gypsum.id, orderedQuantity: 2000, expectedDeliveryDate: new Date(Date.now() + 2 * 86400000), note: "Quarterly gypsum top-up" });
@@ -413,6 +424,13 @@ async function main() {
     requestId: bearingDemoRequest.id, materialId: bearing.id, locationId: engineeringStore.id, quantity: 1, condition: "DAMAGED",
     returnedBy: "Suresh", reason: "Breakdown repair — damaged part swapped out",
     remarks: "Bearing found damaged during installation — race visibly cracked", userId: suresh.id,
+  });
+  // The other bearing from the same issue: Rahul has reported it as returned but Suresh hasn't
+  // received/completed it yet — the "Pending Returns" queue's own demo item, so completing a
+  // Spare Return has something to act on without first walking the report step by hand.
+  await reportSpareReturn({
+    requestId: bearingDemoRequest.id, materialId: bearing.id, quantity: 1, returnedBy: "Rahul",
+    reportedByUserId: rahul.id, reason: "Spare not needed — maintenance job scope changed",
   });
 
   // One spare request left NEW_REQUEST — a live actionable item in the Inventory Manager's queue.

@@ -3,10 +3,8 @@ import { classifyStockStatus } from "@/lib/inventory/status";
 import { IN_TRANSIT_LOCATION_TYPE, OPEN_REQUEST_STATUSES } from "@/lib/domain/enums";
 import { formatQty } from "@/lib/format";
 
-const TRUCKLOAD_MT = 30; // configurable approximation for "truckloads remaining"
-
 export interface AttentionItem {
-  kind: "critical" | "low" | "exception";
+  kind: "critical" | "low";
   href: string;
   title: string;
   subtitle: string;
@@ -50,8 +48,7 @@ export async function getDashboardData() {
     .map((l) => {
       const total = l.balances.reduce((s, b) => s + b.quantity, 0);
       const fillPct = l.capacity ? (total / l.capacity) * 100 : 0;
-      const remaining = (l.capacity ?? 0) - total;
-      return { location: l, total, fillPct, capacityRemaining: remaining, truckloadsRemaining: Math.max(0, Math.floor(remaining / TRUCKLOAD_MT)) };
+      return { location: l, total, fillPct };
     })
     .sort((a, b) => b.fillPct - a.fillPct);
 
@@ -92,8 +89,9 @@ export async function getDashboardData() {
     count: statusCounts.get(s) ?? 0,
   }));
 
-  // Combined "needs attention" feed: stock exceptions (critical/low) and request exceptions
-  // (not received) in one unified list, critical first.
+  // Stock exceptions feed: materials below minimum stock, critical first. Request exceptions
+  // (Not Received) surface in their own Exceptions KPI/queue, not mixed into this material-only
+  // list — kept as one consistent item shape per the panel's own column layout.
   const needsAttention: AttentionItem[] = [
     ...critical.map((r) => ({
       kind: "critical" as const,
@@ -103,15 +101,6 @@ export async function getDashboardData() {
       line1: `${formatQty(r.unrestrictedStock, r.material.uom)} available`,
       line2: r.material.minStock != null ? `Minimum Stock: ${formatQty(r.material.minStock, r.material.uom)}` : "Below minimum stock",
       badgeLabel: "CRITICAL",
-    })),
-    ...notReceivedRequests.map((req) => ({
-      kind: "exception" as const,
-      href: `/requests/${req.id}`,
-      title: req.requestNumber,
-      subtitle: `${req.material.name} | ${formatQty(req.quantityRequested, req.material.uom)}`,
-      line1: "Awaiting action",
-      line2: "Not Received",
-      badgeLabel: "EXCEPTION",
     })),
     ...low.map((r) => ({
       kind: "low" as const,

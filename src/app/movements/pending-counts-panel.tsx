@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { actionPostCountAdjustment } from "@/app/actions";
+import { actionPostCountAdjustment, actionRejectCountAdjustment } from "@/app/actions";
 import { formatNumber } from "@/lib/format";
 
 type PendingCount = {
@@ -16,7 +16,7 @@ type PendingCount = {
   note: string | null;
 };
 
-function CountRow({ count }: { count: PendingCount }) {
+function CountRow({ count, canApprove }: { count: PendingCount; canApprove: boolean }) {
   const [reason, setReason] = useState("");
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState<{ ok: boolean; error?: string } | null>(null);
@@ -24,13 +24,13 @@ function CountRow({ count }: { count: PendingCount }) {
   const variancePct = count.bookQuantity === 0 ? (variance === 0 ? 0 : 100) : (variance / count.bookQuantity) * 100;
   const withinTolerance = Math.abs(variancePct) <= count.tolerancePct;
 
-  function submit() {
+  function submit(action: (fd: FormData) => Promise<{ ok: boolean; error?: string }>) {
     setResult(null);
     const fd = new FormData();
     fd.set("physicalCountId", count.id);
     fd.set("reason", reason);
     startTransition(async () => {
-      const res = await actionPostCountAdjustment(fd);
+      const res = await action(fd);
       setResult(res);
     });
   }
@@ -58,22 +58,29 @@ function CountRow({ count }: { count: PendingCount }) {
         </div>
       </div>
       <div className="mt-1 text-[11px] text-muted-soft">Counted by {count.countedBy}{count.note ? ` — ${count.note}` : ""}</div>
-      <div className="mt-2 flex items-center gap-2">
-        <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason for adjustment" className="block w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-accent" />
-        <button type="button" onClick={submit} disabled={pending || !reason.trim()} className="shrink-0 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground disabled:opacity-40">
-          {pending ? "Posting…" : "Approve & Post"}
-        </button>
-      </div>
+      {canApprove ? (
+        <div className="mt-2 flex items-center gap-2">
+          <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (required for approve or reject)" className="block w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-accent" />
+          <button type="button" onClick={() => submit(actionPostCountAdjustment)} disabled={pending || !reason.trim()} className="btn btn-primary btn-xs shrink-0">
+            {pending ? "Working…" : "Approve & Post"}
+          </button>
+          <button type="button" onClick={() => submit(actionRejectCountAdjustment)} disabled={pending || !reason.trim()} className="btn btn-danger btn-xs shrink-0">
+            Reject
+          </button>
+        </div>
+      ) : (
+        <div className="mt-2 text-[11px] text-muted-soft">Awaiting Inventory Manager review.</div>
+      )}
       {result && !result.ok && <div className="mt-1 text-xs text-[var(--status-critical)]">{result.error}</div>}
     </div>
   );
 }
 
-export function PendingCountsPanel({ counts }: { counts: PendingCount[] }) {
+export function PendingCountsPanel({ counts, canApprove }: { counts: PendingCount[]; canApprove: boolean }) {
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
       {counts.map((c) => (
-        <CountRow key={c.id} count={c} />
+        <CountRow key={c.id} count={c} canApprove={canApprove} />
       ))}
     </div>
   );

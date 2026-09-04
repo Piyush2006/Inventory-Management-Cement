@@ -4,7 +4,10 @@ import { Panel } from "@/components/ui";
 import { getCurrentUser, restrictToRequestsOnly } from "@/lib/auth";
 import {
   STOCK_OPS_ROLES,
+  PHYSICAL_COUNT_ROLES,
   ADJUSTMENT_ROLES,
+  SPARE_RETURN_COMPLETE_ROLES,
+  SPARE_RETURN_VIEW_ROLES,
   DISPATCH_CREATE_ROLES,
   DISPATCH_APPROVE_ROLES,
   DISPATCH_EXECUTE_ROLES,
@@ -20,7 +23,7 @@ export const dynamic = "force-dynamic";
 
 // Each Stock Operations tab shows only the history for its own transaction type — no
 // shared/mixed movement list across tabs (Receive Material's GRN list and Dispatch's list
-// were already tab-scoped; Consume/Transfer/Adjustment now get the same treatment).
+// are tab-scoped; Adjustment gets the same treatment).
 function recentByType(transactionType: string) {
   return prisma.inventoryTransaction.findMany({
     where: { transactionType },
@@ -32,10 +35,10 @@ function recentByType(transactionType: string) {
 
 export default async function StockOperationsPage() {
   // Every query here excludes the virtual in-transit location — it's not a real place to
-  // receive/consume/transfer/count against; it only exists to model a request's delivery.
-  const [materials, spareMaterials, locations, balances, qualityBalances, consumptionMovements, transferMovements, adjustmentMovements, receipts, suppliers, currentUser] = await Promise.all([
-    // Includes spares — Receive/Consume/Transfer/Adjustment/Dispatch are generic to any material.
-    // spareMaterials below is the SPARE-only subset the new Spare Return tab needs.
+  // receive/count against; it only exists to model a request's delivery.
+  const [materials, spareMaterials, locations, balances, qualityBalances, adjustmentMovements, receipts, suppliers, currentUser] = await Promise.all([
+    // Includes spares — Receive/Adjustment/Dispatch are generic to any material.
+    // spareMaterials below is the SPARE-only subset the Spare Return tab needs.
     prisma.material.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
     prisma.material.findMany({ where: { active: true, category: "SPARE" }, orderBy: { name: "asc" } }),
     prisma.location.findMany({ where: { active: true, type: { not: IN_TRANSIT_LOCATION_TYPE } }, orderBy: { name: "asc" } }),
@@ -43,8 +46,6 @@ export default async function StockOperationsPage() {
     // Batched, avoids an N+1 getUnrestrictedAvailable() call per (material, location) row —
     // same pattern already used in inventory/page.tsx and dashboard.ts.
     prisma.qualityBalance.findMany({}),
-    recentByType("CONSUMPTION"),
-    recentByType("TRANSFER"),
     recentByType("ADJUSTMENT"),
     prisma.materialReceipt.findMany({ include: { supplier: true, material: true }, orderBy: { createdAt: "desc" }, take: 15 }),
     prisma.supplier.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
@@ -52,10 +53,19 @@ export default async function StockOperationsPage() {
   ]);
   restrictToRequestsOnly(currentUser);
   // Store Supervisor is intentionally NOT redirected away from this page anymore — it needs to
-  // reach the Dispatch tab (see DISPATCH_* role constants below). MovementTabs still hides the
-  // Receive Material/Consume/Transfer/Adjustment tabs from anyone canRecord doesn't cover.
+  // reach the Dispatch tab (see DISPATCH_* role constants below), and now the Adjustment tab's
+  // physical-count step too (see canRecordAdjustment). MovementTabs still hides Receive
+  // Material from anyone canRecord doesn't cover.
   const canRecord = STOCK_OPS_ROLES.includes(currentUser.role as UserRole);
+  // Adjustment workflow: who can record a physical count / submit a discrepancy for review —
+  // broader than canRecord (adds Store Supervisor). Who can approve/reject/post one stays
+  // canApprove (ADJUSTMENT_ROLES = Inventory Manager/Admin only), unchanged.
+  const canRecordAdjustment = PHYSICAL_COUNT_ROLES.includes(currentUser.role as UserRole);
   const canApprove = ADJUSTMENT_ROLES.includes(currentUser.role as UserRole);
+  // Spare Return: who can complete a reported return (post it to inventory) vs. who can only
+  // view/monitor the tab — Inventory Manager/Store Supervisor get view-only per spec.
+  const canCompleteSpareReturn = SPARE_RETURN_COMPLETE_ROLES.includes(currentUser.role as UserRole);
+  const canViewSpareReturns = SPARE_RETURN_VIEW_ROLES.includes(currentUser.role as UserRole);
   const role = currentUser.role as UserRole;
   const canAccessDispatch =
     DISPATCH_CREATE_ROLES.includes(role) || DISPATCH_APPROVE_ROLES.includes(role) || DISPATCH_EXECUTE_ROLES.includes(role) || DISPATCH_CANCEL_ROLES.includes(role);
@@ -76,20 +86,22 @@ export default async function StockOperationsPage() {
     tolerancePct: b.material.tolerancePct ?? DEFAULT_TOLERANCE_PCT,
   }));
 
-  // Only counts that actually have a variance and haven't been posted yet — a count that
-  // matched book stock exactly also has no adjustmentTransactionId (there was nothing to
-  // adjust), so that alone isn't "pending," it's just done.
-  const pendingCounts = canApprove
+  // Only counts that actually have a variance and haven't been posted or rejected yet — a
+  // count that matched book stock exactly also has no adjustmentTransactionId (there was
+  // nothing to adjust), so that alone isn't "pending," it's just done. Visible to anyone who
+  // can record a count (Store Operator/Supervisor "review", per spec) — but only canApprove
+  // renders the Approve/Reject controls; everyone else sees it read-only.
+  const pendingCounts = canApprove || canRecordAdjustment
     ? (
         await prisma.physicalCount.findMany({
-          where: { adjustmentTransactionId: null },
+          where: { adjustmentTransactionId: null, rejectedAt: null },
           include: { material: true, location: true },
           orderBy: { countedAt: "desc" },
         })
       ).filter((c) => Math.abs(c.countedQuantity - c.bookQuantityAtCount) > 1e-6)
     : [];
 
-  function movementRows(rows: typeof consumptionMovements) {
+  function movementRows(rows: typeof adjustmentMovements) {
     return rows.map((m) => ({
       id: m.id,
       timestamp: m.timestamp,
@@ -102,8 +114,6 @@ export default async function StockOperationsPage() {
       reference: m.reference ?? m.reason ?? null,
     }));
   }
-  const consumptionRows = movementRows(consumptionMovements);
-  const transferRows = movementRows(transferMovements);
   const adjustmentRows = movementRows(adjustmentMovements);
 
   const receiptRows = receipts.map((r) => ({
@@ -149,7 +159,7 @@ export default async function StockOperationsPage() {
   // this query offered every SPARE-type request regardless of purpose/whether anything had
   // ever been issued. "Already returned" is now a real FK aggregate against SpareReturn.requestId,
   // not a string match on InventoryTransaction.reference/reason.
-  const spareRequests = canRecord
+  const spareRequests = canViewSpareReturns
     ? await prisma.stockRequest.findMany({
         where: { requestType: "SPARE", purpose: "ISSUE", deliveredQuantity: { gt: 0 } },
         orderBy: { createdAt: "desc" },
@@ -173,10 +183,12 @@ export default async function StockOperationsPage() {
     alreadyReturned: returnedByRequestId.get(r.id) ?? 0,
   }));
 
-  // Spare Return List: the persisted SpareReturn records themselves, most recent first.
-  const spareReturns = canRecord
+  // Spare Return List: the persisted SpareReturn records themselves, most recent first —
+  // REPORTED (awaiting a Store Operator to complete) and COMPLETED both included; the panel
+  // itself splits them into a "Pending" section and a "History" table.
+  const spareReturns = canViewSpareReturns
     ? await prisma.spareReturn.findMany({
-        include: { material: true, location: true, processedBy: true },
+        include: { material: true, location: true, processedBy: true, reportedBy: true },
         orderBy: { createdAt: "desc" },
         take: 50,
       })
@@ -185,13 +197,17 @@ export default async function StockOperationsPage() {
     id: sr.id,
     returnReference: sr.returnReference,
     originalIssueReference: sr.originalIssueReference,
+    materialId: sr.materialId,
     materialName: sr.material.name,
     uom: sr.material.uom,
     quantity: sr.quantity,
+    status: sr.status,
     returnedBy: sr.returnedBy,
+    reportedByName: sr.reportedBy?.name ?? "—",
+    reason: sr.reason,
     condition: sr.condition,
-    locationName: sr.location.name,
-    processedByName: sr.processedBy.name,
+    locationName: sr.location?.name ?? null,
+    processedByName: sr.processedBy?.name ?? null,
     createdAt: sr.createdAt,
   }));
 
@@ -202,7 +218,7 @@ export default async function StockOperationsPage() {
       </div>
 
       <Panel>
-        {canRecord || canAccessDispatch ? (
+        {canRecord || canAccessDispatch || canRecordAdjustment || canViewSpareReturns ? (
           <Suspense>
             <MovementTabs
               materials={materials.map((m) => ({ id: m.id, name: m.name, uom: m.uom }))}
@@ -211,11 +227,12 @@ export default async function StockOperationsPage() {
               receipts={receiptRows}
               suppliers={suppliers.map((s) => ({ id: s.id, name: s.name }))}
               canRecord={canRecord}
+              canRecordAdjustment={canRecordAdjustment}
+              canCompleteSpareReturn={canCompleteSpareReturn}
+              canViewSpareReturns={canViewSpareReturns}
               dispatches={dispatchRows}
               canCreateDispatch={DISPATCH_CREATE_ROLES.includes(role)}
               canAccessDispatch={canAccessDispatch}
-              consumptionMovements={consumptionRows}
-              transferMovements={transferRows}
               adjustmentMovements={adjustmentRows}
               pendingCounts={pendingCounts.map((c) => ({
                 id: c.id,

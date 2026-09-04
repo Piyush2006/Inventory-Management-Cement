@@ -76,10 +76,10 @@ export function RequestActionPanel({
     <div className="space-y-3">
       {status === "NEW_REQUEST" && canAcceptReject && (
         <div className="flex flex-wrap items-center gap-2">
-          <button onClick={() => runSimple(actionAcceptStockRequest)} disabled={pending} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-40">
+          <button onClick={() => runSimple(actionAcceptStockRequest)} disabled={pending} className="btn btn-primary btn-md">
             {pending ? "Working…" : "Accept"}
           </button>
-          <button onClick={() => setShowReject((v) => !v)} className="rounded-md border border-border px-4 py-2 text-sm text-muted hover:text-foreground">
+          <button onClick={() => setShowReject((v) => !v)} className="btn btn-secondary btn-md">
             {showReject ? "Close" : "Reject"}
           </button>
         </div>
@@ -98,7 +98,7 @@ export function RequestActionPanel({
         >
           <input type="hidden" name="id" value={requestId} />
           <input name="reason" required placeholder="Rejection reason (required)…" className="w-64 rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
-          <button type="submit" disabled={pending} className="rounded-md bg-[var(--status-critical-solid)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40">
+          <button type="submit" disabled={pending} className="btn btn-danger btn-sm">
             Confirm Reject
           </button>
         </form>
@@ -122,7 +122,7 @@ export function RequestActionPanel({
               ))}
             </select>
           </label>
-          <button type="submit" disabled={pending || supervisors.length === 0} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-40">
+          <button type="submit" disabled={pending || supervisors.length === 0} className="btn btn-primary btn-md">
             {pending ? "Routing…" : routedToName ? "Re-route" : "Route"}
           </button>
           {supervisors.length === 0 && <span className="text-xs text-[var(--status-critical)]">No active Store Supervisors configured.</span>}
@@ -151,7 +151,7 @@ export function RequestActionPanel({
               ))}
             </select>
           </label>
-          <button type="submit" disabled={pending || operators.length === 0} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-40">
+          <button type="submit" disabled={pending || operators.length === 0} className="btn btn-primary btn-md">
             {pending ? "Assigning…" : "Assign"}
           </button>
           {operators.length === 0 && <span className="text-xs text-[var(--status-critical)]">No active Store/Delivery Operators configured.</span>}
@@ -159,7 +159,7 @@ export function RequestActionPanel({
       )}
 
       {status === "ASSIGNED" && isAssignedOperator && (
-        <button onClick={() => runSimple(actionStartDelivery)} disabled={pending} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-40">
+        <button onClick={() => runSimple(actionStartDelivery)} disabled={pending} className="btn btn-primary btn-md">
           {pending ? "Starting…" : "Start Delivery"}
         </button>
       )}
@@ -177,7 +177,7 @@ export function RequestActionPanel({
             Delivery note (optional)
             <input name="deliveryNote" className="mt-1 block w-56 rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
           </label>
-          <button type="submit" disabled={pending} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-40">
+          <button type="submit" disabled={pending} className="btn btn-primary btn-md">
             {pending ? "Marking…" : "Mark Delivered"}
           </button>
         </form>
@@ -197,10 +197,10 @@ export function RequestActionPanel({
               Received quantity ({uom}) — {formatNumber(deliveredNotYetReceived)} delivered
               <input name="quantity" type="number" step="any" min="0.01" max={deliveredNotYetReceived} defaultValue={deliveredNotYetReceived} className="mt-1 block w-48 rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
             </label>
-            <button type="submit" disabled={pending} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-40">
+            <button type="submit" disabled={pending} className="btn btn-primary btn-md">
               {pending ? "Confirming…" : "Confirm Receipt"}
             </button>
-            <button type="button" onClick={() => setShowNotReceived((v) => !v)} className="rounded-md border border-border px-4 py-2 text-sm text-muted hover:text-foreground">
+            <button type="button" onClick={() => setShowNotReceived((v) => !v)} className="btn btn-secondary btn-md">
               {showNotReceived ? "Close" : "Not Received"}
             </button>
           </form>
@@ -218,7 +218,7 @@ export function RequestActionPanel({
             >
               <input type="hidden" name="id" value={requestId} />
               <input name="reason" required placeholder="Reason material was not received (required)…" className="w-72 rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
-              <button type="submit" disabled={pending} className="rounded-md bg-[var(--status-critical-solid)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40">
+              <button type="submit" disabled={pending} className="btn btn-danger btn-sm">
                 Confirm Not Received
               </button>
             </form>

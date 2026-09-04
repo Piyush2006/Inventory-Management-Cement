@@ -37,8 +37,10 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
       orderBy: { timestamp: "desc" },
       take: 10,
     }),
+    // Excludes CONSUMPTION — that's already broken out in its own Consumption History panel
+    // above, so showing it here too would just duplicate the same rows under a second heading.
     prisma.inventoryTransaction.findMany({
-      where: { materialId },
+      where: { materialId, transactionType: { not: "CONSUMPTION" } },
       include: { sourceLocation: true, destinationLocation: true },
       orderBy: { timestamp: "desc" },
       take: 20,

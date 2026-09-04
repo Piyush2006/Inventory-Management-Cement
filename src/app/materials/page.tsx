@@ -30,7 +30,7 @@ export default async function MaterialsPage() {
         )}
       </div>
 
-      <Panel title="Materials">
+      <Panel>
         <MaterialsManager
           canEdit={canManage}
           materials={materials.map((m) => ({

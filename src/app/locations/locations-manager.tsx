@@ -5,6 +5,7 @@ import { actionSaveLocation, actionDeleteLocation } from "@/app/actions";
 import { LOCATION_TYPES } from "@/lib/domain/enums";
 import { formatNumber } from "@/lib/format";
 import { EditIcon, DeleteIcon } from "@/components/ui";
+import { Modal } from "@/components/modal";
 
 // Same two values materials-manager.tsx's own UOM select offers — no new vocabulary, no
 // conversion logic. A location's capacity UOM is independent of any material's own uom.
@@ -70,20 +71,22 @@ export function LocationsManager({ locations, canEdit }: { locations: Location[]
       <div className="flex items-center justify-between">
         <div className="text-xs text-muted">{locations.length} locations</div>
         {canEdit && (
-          <button onClick={() => setAdding((v) => !v)} className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground">
-            {adding ? "Cancel" : "+ Add Location"}
+          <button onClick={() => setAdding(true)} className="btn btn-primary btn-xs">
+            + Add Location
           </button>
         )}
       </div>
 
-      {canEdit && adding && (
-        <form className="space-y-3 rounded-md border border-accent/30 bg-accent-soft p-3" action={(fd) => submit(fd, () => setAdding(false))}>
-          <LocationFields />
-          {error && <div className="text-sm text-[var(--status-critical)]">{error}</div>}
-          <button type="submit" disabled={pending} className="rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground disabled:opacity-40">
-            {pending ? "Saving…" : "Save Location"}
-          </button>
-        </form>
+      {canEdit && (
+        <Modal open={adding} onClose={() => setAdding(false)} title="Add Location">
+          <form className="space-y-3" action={(fd) => submit(fd, () => setAdding(false))}>
+            <LocationFields />
+            {error && <div className="text-sm text-[var(--status-critical)]">{error}</div>}
+            <button type="submit" disabled={pending} className="btn btn-primary btn-sm">
+              {pending ? "Saving…" : "Save Location"}
+            </button>
+          </form>
+        </Modal>
       )}
 
       <div className="overflow-x-auto scrollbar-thin">
@@ -146,7 +149,7 @@ export function LocationsManager({ locations, canEdit }: { locations: Location[]
                         <input type="hidden" name="id" value={l.id} />
                         <LocationFields location={l} />
                         {error && <div className="text-sm text-[var(--status-critical)]">{error}</div>}
-                        <button type="submit" disabled={pending} className="rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground disabled:opacity-40">
+                        <button type="submit" disabled={pending} className="btn btn-primary btn-sm">
                           {pending ? "Saving…" : "Save Changes"}
                         </button>
                       </form>

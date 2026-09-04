@@ -10,7 +10,7 @@ export function MarkAllReadButton({ disabled }: { disabled: boolean }) {
       type="button"
       disabled={disabled || pending}
       onClick={() => startTransition(async () => { await actionMarkAllNotificationsRead(); })}
-      className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted hover:border-accent/50 hover:text-foreground disabled:opacity-40"
+      className="btn btn-secondary btn-xs"
     >
       {pending ? "Marking…" : "Mark all read"}
     </button>

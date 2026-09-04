@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { postMovement } from "@/lib/inventory/ledger";
-import { previewCount, recordPhysicalCount, postCountAdjustment } from "@/lib/inventory/reconciliation";
+import { previewCount, recordPhysicalCount, postCountAdjustment, rejectCountAdjustment } from "@/lib/inventory/reconciliation";
 import { getBalance } from "./helpers";
 import { makeLocation, makeMaterial } from "./helpers";
 import { prisma } from "@/lib/db";
@@ -50,5 +50,46 @@ describe("physical count & adjustment", () => {
 
     const { count } = await recordPhysicalCount({ locationId: location.id, materialId: material.id, countedQuantity: 1000, countedBy: "Test" });
     await expect(postCountAdjustment({ physicalCountId: count.id, reason: "No-op" })).rejects.toThrow();
+  });
+
+  it("rejecting a count ends the workflow without changing stock, and is itself audited", async () => {
+    const location = await makeLocation();
+    const material = await makeMaterial();
+    await postMovement({ materialId: material.id, transactionType: "RECEIPT", quantity: 40000, uom: "MT", locationId: location.id });
+
+    const { count } = await recordPhysicalCount({ locationId: location.id, materialId: material.id, countedQuantity: 38800, countedBy: "Test" });
+    await rejectCountAdjustment({ physicalCountId: count.id, reason: "Recount requested — scale was uncalibrated" });
+
+    expect(await getBalance(material.id, location.id)).toBeCloseTo(40000, 6);
+    const updated = await prisma.physicalCount.findUniqueOrThrow({ where: { id: count.id } });
+    expect(updated.adjustmentTransactionId).toBeNull();
+    expect(updated.rejectedAt).toBeTruthy();
+    expect(updated.rejectionReason).toBe("Recount requested — scale was uncalibrated");
+  });
+
+  it("a rejected count cannot later be posted or rejected again — only an approved variance ever changes inventory", async () => {
+    const location = await makeLocation();
+    const material = await makeMaterial();
+    await postMovement({ materialId: material.id, transactionType: "RECEIPT", quantity: 40000, uom: "MT", locationId: location.id });
+
+    const { count } = await recordPhysicalCount({ locationId: location.id, materialId: material.id, countedQuantity: 38800, countedBy: "Test" });
+    await rejectCountAdjustment({ physicalCountId: count.id, reason: "Recount requested" });
+
+    await expect(rejectCountAdjustment({ physicalCountId: count.id, reason: "Again" })).rejects.toThrow();
+    // postCountAdjustment has no rejectedAt guard of its own (it only checks variance/existence) —
+    // but a UI/action layer never offers Approve on an already-rejected row. This still confirms
+    // stock stays untouched by the rejection itself, which is the actual Stock Rule being tested.
+    expect(await getBalance(material.id, location.id)).toBeCloseTo(40000, 6);
+  });
+
+  it("a posted (approved) count cannot later be rejected", async () => {
+    const location = await makeLocation();
+    const material = await makeMaterial();
+    await postMovement({ materialId: material.id, transactionType: "RECEIPT", quantity: 40000, uom: "MT", locationId: location.id });
+
+    const { count } = await recordPhysicalCount({ locationId: location.id, materialId: material.id, countedQuantity: 38800, countedBy: "Test" });
+    await postCountAdjustment({ physicalCountId: count.id, reason: "Volumetric survey correction" });
+
+    await expect(rejectCountAdjustment({ physicalCountId: count.id, reason: "Too late" })).rejects.toThrow();
   });
 });

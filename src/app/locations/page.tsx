@@ -29,7 +29,7 @@ export default async function LocationsPage() {
         )}
       </div>
 
-      <Panel title="Locations">
+      <Panel>
         <LocationsManager
           canEdit={canManage}
           locations={locations.map((l) => {

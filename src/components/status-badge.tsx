@@ -9,7 +9,7 @@ const STOCK_STYLES: Record<StockStatus, { label: string; fg: string; bg: string;
 export function StatusBadge({ status, label }: { status: StockStatus; label?: string }) {
   const s = STOCK_STYLES[status];
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${s.fg} ${s.bg}`}>
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ring-current/15 ${s.fg} ${s.bg}`}>
       <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
       {label ?? s.label}
     </span>
@@ -41,5 +41,5 @@ const REQUEST_LABEL: Record<RequestStatus, string> = {
 
 export function RequestStatusBadge({ status }: { status: RequestStatus }) {
   const s = REQUEST_STYLES[status];
-  return <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${s.fg} ${s.bg}`}>{REQUEST_LABEL[status]}</span>;
+  return <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ring-current/15 ${s.fg} ${s.bg}`}>{REQUEST_LABEL[status]}</span>;
 }

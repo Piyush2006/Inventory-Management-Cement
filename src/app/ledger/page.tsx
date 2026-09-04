@@ -72,8 +72,8 @@ export default async function LedgerPage({
             <input type="date" name="to" defaultValue={params.to ?? ""} className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
           </label>
           <div className="col-span-2 flex items-end gap-2 sm:col-span-4">
-            <button type="submit" className="rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground">Apply</button>
-            <Link href="/ledger" className="rounded-md border border-border px-4 py-1.5 text-sm text-muted hover:text-foreground">Clear</Link>
+            <button type="submit" className="btn btn-primary btn-sm">Apply</button>
+            <Link href="/ledger" className="btn btn-secondary btn-sm">Clear</Link>
           </div>
         </form>
       </Panel>

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { classifyStockStatus } from "@/lib/inventory/status";
-import { Panel, Th, Td, LinkPill, EmptyState, OverstockBadge } from "@/components/ui";
+import { Panel, Th, Td, EmptyState, ViewIcon } from "@/components/ui";
 import { StatusBadge } from "@/components/status-badge";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { formatNumber } from "@/lib/format";
@@ -71,7 +71,7 @@ export default async function InventoryPage({
           <h1 className="text-lg font-semibold text-foreground">Inventory</h1>
         </div>
         {canReceiveMaterial && (
-          <Link href="/receipts/new" className="shrink-0 rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground">
+          <Link href="/receipts/new" className="btn btn-primary btn-md shrink-0">
             + Receive Material
           </Link>
         )}
@@ -177,12 +177,18 @@ export default async function InventoryPage({
                     <Td className="text-right tabular text-muted">{r.material.minStock != null ? formatNumber(r.material.minStock) : "—"}</Td>
                     <Td className="text-right tabular text-muted">{r.material.maxStock != null ? formatNumber(r.material.maxStock) : "—"}</Td>
                     <Td>
-                      <div className="flex items-center gap-1.5">
-                        <StatusBadge status={r.status} />
-                        {r.overstock && <OverstockBadge />}
-                      </div>
+                      <StatusBadge status={r.status} />
                     </Td>
-                    <Td><LinkPill href={`/inventory/${r.material.id}`}>View →</LinkPill></Td>
+                    <Td>
+                      <Link
+                        href={`/inventory/${r.material.id}`}
+                        title="View details"
+                        aria-label={`View details for ${r.material.name}`}
+                        className="inline-flex rounded p-1.5 text-muted hover:bg-surface-raised hover:text-accent"
+                      >
+                        <ViewIcon />
+                      </Link>
+                    </Td>
                   </tr>
                 ))}
               </tbody>

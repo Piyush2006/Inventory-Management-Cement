@@ -1,8 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { postMovement, postAdjustment, postTransfer } from "@/lib/inventory/ledger";
-import { recordPhysicalCount, postCountAdjustment } from "@/lib/inventory/reconciliation";
+import { postAdjustment } from "@/lib/inventory/ledger";
+import { recordPhysicalCount, postCountAdjustment, rejectCountAdjustment } from "@/lib/inventory/reconciliation";
 import { changeQualityStatus, reconcileQualityBalances } from "@/lib/inventory/quality";
 import {
   createStockRequest,
@@ -33,13 +33,13 @@ import {
 } from "@/lib/inventory/dispatch";
 import { getCurrentUser, setCurrentUser, clearCurrentUser, requireRole } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { ADJUSTMENT_ROLES, STOCK_OPS_ROLES, MASTER_DATA_ROLES, NOTIFICATION_CONFIG_ROLES, REPORT_TYPES, REPORT_SCHEDULE_FREQUENCIES, REPORT_SCHEDULE_RECIPIENT_TYPES, REPORT_TYPE_LABELS, DAYS_OF_WEEK, ADMIN_ROLE, USER_ROLES, type TransactionType, type QualityStatus, type UserRole } from "@/lib/domain/enums";
+import { ADJUSTMENT_ROLES, STOCK_OPS_ROLES, PHYSICAL_COUNT_ROLES, SPARE_RETURN_REPORT_ROLES, SPARE_RETURN_COMPLETE_ROLES, MASTER_DATA_ROLES, NOTIFICATION_CONFIG_ROLES, REPORT_TYPES, REPORT_SCHEDULE_FREQUENCIES, REPORT_SCHEDULE_RECIPIENT_TYPES, REPORT_TYPE_LABELS, DAYS_OF_WEEK, ADMIN_ROLE, USER_ROLES, type QualityStatus, type UserRole } from "@/lib/domain/enums";
 import { triggerNotification } from "@/lib/notifications/engine";
 import { checkStockThresholds } from "@/lib/notifications/stockThreshold";
 import type { NotificationEvent } from "@/lib/notifications/events";
 import { sendEmail } from "@/lib/notifications/email";
 import { answerBruceQuestion } from "@/lib/bruce/answer";
-import { postSpareReturn } from "@/lib/inventory/spareReturn";
+import { postSpareReturn, reportSpareReturn, completeSpareReturn } from "@/lib/inventory/spareReturn";
 import type { ReturnCondition } from "@/lib/domain/enums";
 
 function fail(message: string) {
@@ -56,52 +56,8 @@ function revalidateInventoryViews() {
 }
 
 // ---------------------------------------------------------------------------
-// Stock Operations — Receive Material / Consume / Transfer / Adjustment
+// Stock Operations — Receive Material / Adjustment
 // ---------------------------------------------------------------------------
-
-export async function actionRecordMovement(formData: FormData) {
-  try {
-    const user = await getCurrentUser();
-    requireRole(user, STOCK_OPS_ROLES);
-    const transactionType = String(formData.get("transactionType")) as TransactionType;
-    const materialId = String(formData.get("materialId"));
-    const quantity = Number(formData.get("quantity"));
-    const reference = formData.get("reference") ? String(formData.get("reference")) : undefined;
-    if (!materialId || Number.isNaN(quantity) || quantity <= 0) return fail("Missing required fields");
-
-    const material = await prisma.material.findUniqueOrThrow({ where: { id: materialId } });
-    if (!material.active) return fail(`${material.name} is not active`);
-
-    if (transactionType === "TRANSFER") {
-      const sourceLocationId = String(formData.get("sourceLocationId"));
-      const destinationLocationId = String(formData.get("destinationLocationId"));
-      if (!sourceLocationId || !destinationLocationId) return fail("Source and destination locations are required");
-      const [sourceLocation, destinationLocation] = await Promise.all([
-        prisma.location.findUniqueOrThrow({ where: { id: sourceLocationId } }),
-        prisma.location.findUniqueOrThrow({ where: { id: destinationLocationId } }),
-      ]);
-      if (!sourceLocation.active || !destinationLocation.active) return fail("Source and destination locations must both be active");
-      await postTransfer({ materialId, quantity, uom: material.uom, sourceLocationId, destinationLocationId, reference });
-    } else if (transactionType === "CONSUMPTION") {
-      const locationId = String(formData.get("locationId"));
-      if (!locationId) return fail("A location is required");
-      const location = await prisma.location.findUniqueOrThrow({ where: { id: locationId } });
-      if (!location.active) return fail(`${location.name} is not active`);
-      const processName = formData.get("processName") ? String(formData.get("processName")) : undefined;
-      await postMovement({ materialId, transactionType, quantity, uom: material.uom, locationId, reference, processName });
-    } else {
-      return fail(`${transactionType} is not handled by this form`);
-    }
-
-    await checkStockThresholds(materialId);
-    revalidateInventoryViews();
-    revalidatePath("/movements");
-    revalidatePath("/requests");
-    return ok();
-  } catch (e) {
-    return fail(e instanceof Error ? e.message : "Failed to record movement");
-  }
-}
 
 export async function actionRecordPhysicalCount(formData: FormData) {
   try {
@@ -128,13 +84,14 @@ export async function actionRecordPhysicalCount(formData: FormData) {
  * A reason is only required (and only an adjustment posted) when there's a nonzero
  * variance. Posting still requires ADJUSTMENT_ROLES (Inventory Manager/Admin) — but a
  * variance from anyone else now records the count and leaves it pending approval instead
- * of failing outright, so a Store Operator can complete their count and hand it off. See
- * the "Pending Physical Counts" panel (actionPostCountAdjustment) for the approval step.
+ * of failing outright, so a Store Operator or Store Supervisor can complete their count and
+ * hand it off. See the "Pending Physical Counts" panel (actionPostCountAdjustment /
+ * actionRejectCountAdjustment) for the approval step.
  */
 export async function actionRecordCountAndAdjust(formData: FormData) {
   try {
     const user = await getCurrentUser();
-    requireRole(user, STOCK_OPS_ROLES);
+    requireRole(user, PHYSICAL_COUNT_ROLES);
     const locationId = String(formData.get("locationId"));
     const materialId = String(formData.get("materialId"));
     const countedQuantity = Number(formData.get("countedQuantity"));
@@ -174,6 +131,27 @@ export async function actionPostCountAdjustment(formData: FormData) {
     return ok();
   } catch (e) {
     return fail(e instanceof Error ? e.message : "Failed to post adjustment");
+  }
+}
+
+/**
+ * The other branch of the Inventory Manager's review — ends the workflow for a submitted
+ * count without posting anything (Stock Rule: only an *approved* variance ever changes
+ * inventory). Rejecting just marks the count rejected/auditable; it never touches the ledger,
+ * so unlike actionPostCountAdjustment there's nothing to revalidate beyond the counts list.
+ */
+export async function actionRejectCountAdjustment(formData: FormData) {
+  try {
+    const physicalCountId = String(formData.get("physicalCountId"));
+    const reason = String(formData.get("reason") || "");
+    if (!physicalCountId || !reason.trim()) return fail("A reason is required to reject a count");
+    const user = await getCurrentUser();
+    requireRole(user, ADJUSTMENT_ROLES);
+    await rejectCountAdjustment({ physicalCountId, reason });
+    revalidatePath("/movements");
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to reject count");
   }
 }
 
@@ -1061,14 +1039,18 @@ export async function actionRunReportSchedule(formData: FormData) {
 }
 
 // ---------------------------------------------------------------------------
-// Spare Management — a spare return posts through the existing ledger/quality mechanisms
-// (src/lib/inventory/spareReturn.ts). Same STOCK_OPS_ROLES gate as every other recording action.
+// Spare Return — two stages. actionReportSpareReturn (Requester/Maintenance, or a Store
+// Operator on the fast path) declares a return with no inventory effect. actionCompleteSpareReturn
+// (Store Operator/Admin only — Inventory Manager/Store Supervisor are view-only per spec) is the
+// only action that actually posts the ledger entry. actionPostSpareReturn keeps the original
+// single-step "walk-in" path for a Store Operator who's never had it separately reported.
+// All three post through the existing ledger/quality mechanisms (src/lib/inventory/spareReturn.ts).
 // ---------------------------------------------------------------------------
 
 export async function actionPostSpareReturn(formData: FormData) {
   try {
     const user = await getCurrentUser();
-    requireRole(user, STOCK_OPS_ROLES);
+    requireRole(user, SPARE_RETURN_COMPLETE_ROLES);
     const requestId = String(formData.get("requestId") || "");
     const materialId = String(formData.get("materialId"));
     const locationId = String(formData.get("locationId"));
@@ -1092,6 +1074,71 @@ export async function actionPostSpareReturn(formData: FormData) {
     return ok({ returnReference: spareReturn.returnReference });
   } catch (e) {
     return fail(e instanceof Error ? e.message : "Failed to record spare return");
+  }
+}
+
+/**
+ * Stage 1 — a Requester/Maintenance user reports a spare being returned against their own
+ * previously issued request. Ownership is enforced here, not just by which link the UI shows:
+ * a non-Admin Requester may only report against a request they themselves raised, even if they
+ * somehow submit another user's request id.
+ */
+export async function actionReportSpareReturn(formData: FormData) {
+  try {
+    const user = await getCurrentUser();
+    requireRole(user, SPARE_RETURN_REPORT_ROLES);
+    const requestId = String(formData.get("requestId") || "");
+    const quantity = Number(formData.get("quantity"));
+    const returnedBy = String(formData.get("returnedBy") || "");
+    const reason = formData.get("reason") ? String(formData.get("reason")) : undefined;
+    const remarks = formData.get("remarks") ? String(formData.get("remarks")) : undefined;
+    if (!requestId || Number.isNaN(quantity) || quantity <= 0 || !returnedBy.trim()) return fail("Missing required fields");
+
+    const request = await prisma.stockRequest.findUniqueOrThrow({ where: { id: requestId } });
+    if (user.role === "REQUESTER" && request.requestedByUserId !== user.id) {
+      return fail("You can only report a return against your own request");
+    }
+
+    const spareReturn = await reportSpareReturn({
+      requestId,
+      materialId: request.materialId,
+      quantity,
+      returnedBy,
+      reportedByUserId: user.id,
+      reason,
+      remarks,
+    });
+    revalidatePath(`/requests/${requestId}`);
+    revalidatePath("/movements");
+    return ok({ returnReference: spareReturn.returnReference });
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to report spare return");
+  }
+}
+
+/**
+ * Stage 2 — a Store Operator (or Admin) receives a previously-reported return, inspects it, and
+ * completes it: picks the receiving location and records the verified condition. This is the
+ * step that actually posts inventory. No separate approval step on top of this — the spec is
+ * explicit that a normal Spare Return needs no additional approval level beyond this completion.
+ */
+export async function actionCompleteSpareReturn(formData: FormData) {
+  try {
+    const user = await getCurrentUser();
+    requireRole(user, SPARE_RETURN_COMPLETE_ROLES);
+    const spareReturnId = String(formData.get("spareReturnId") || "");
+    const locationId = String(formData.get("locationId") || "");
+    const condition = String(formData.get("condition") || "") as ReturnCondition;
+    if (!spareReturnId || !locationId || !condition) return fail("Missing required fields");
+
+    const spareReturn = await completeSpareReturn({ spareReturnId, locationId, condition, processedByUserId: user.id });
+    await checkStockThresholds(spareReturn.materialId);
+    revalidateInventoryViews();
+    revalidatePath("/movements");
+    revalidatePath(`/requests/${spareReturn.requestId}`);
+    return ok({ returnReference: spareReturn.returnReference });
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to complete spare return");
   }
 }
 

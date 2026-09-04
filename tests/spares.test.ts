@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { prisma } from "@/lib/db";
 import { getLocationOnHand } from "@/lib/inventory/balance";
 import { getQualityBalances } from "@/lib/inventory/quality";
-import { postSpareReturn, SpareReturnError } from "@/lib/inventory/spareReturn";
+import { postSpareReturn, reportSpareReturn, completeSpareReturn, getIssuedRemainingForRequest, SpareReturnError } from "@/lib/inventory/spareReturn";
 import { createStockRequest } from "@/lib/inventory/requests";
 import { makeLocation, makeMaterial, makeUser, makeSpareIssueRequest } from "./helpers";
 
@@ -118,12 +118,83 @@ describe("postSpareReturn — condition maps onto the existing quality statuses,
     expect(spareReturn.originalIssueReference).toBe(request.requestNumber);
     expect(spareReturn.returnReference).toMatch(/^RET-/);
     expect(spareReturn.condition).toBe("DAMAGED");
+    // postSpareReturn is the report+complete fast path — inventoryTransactionId is only ever
+    // null on a still-REPORTED (not yet completed) return, which this never produces.
+    expect(spareReturn.status).toBe("COMPLETED");
 
-    const tx = await prisma.inventoryTransaction.findUniqueOrThrow({ where: { id: spareReturn.inventoryTransactionId } });
+    const tx = await prisma.inventoryTransaction.findUniqueOrThrow({ where: { id: spareReturn.inventoryTransactionId! } });
     expect(tx.transactionType).toBe("RECEIPT");
     expect(tx.reference).toBe(spareReturn.returnReference);
     expect(tx.reason).toContain("Returned by Suresh");
     expect(tx.reason).toContain("DAMAGED");
+  });
+});
+
+describe("reportSpareReturn / completeSpareReturn — the two-stage Spare Return workflow", () => {
+  it("reporting a return has no inventory effect — stock only moves on completion", async () => {
+    const { location, spare, request } = await setupSpareIssue(2);
+    const requester = await prisma.stockRequest.findUniqueOrThrow({ where: { id: request.id } });
+
+    const reported = await reportSpareReturn({ requestId: request.id, materialId: spare.id, quantity: 2, returnedBy: "Rahul", reportedByUserId: requester.requestedByUserId });
+
+    expect(reported.status).toBe("REPORTED");
+    expect(reported.locationId).toBeNull();
+    expect(reported.condition).toBeNull();
+    expect(reported.inventoryTransactionId).toBeNull();
+    expect(await getLocationOnHand(spare.id, location.id)).toBeCloseTo(0, 6);
+  });
+
+  it("completing a reported return posts inventory exactly like the single-step fast path", async () => {
+    const { location, spare, operator, request } = await setupSpareIssue(2);
+    const requester = await prisma.stockRequest.findUniqueOrThrow({ where: { id: request.id } });
+
+    const reported = await reportSpareReturn({ requestId: request.id, materialId: spare.id, quantity: 2, returnedBy: "Rahul", reportedByUserId: requester.requestedByUserId });
+    const completed = await completeSpareReturn({ spareReturnId: reported.id, locationId: location.id, condition: "SERVICEABLE", processedByUserId: operator.id });
+
+    expect(completed.status).toBe("COMPLETED");
+    expect(completed.locationId).toBe(location.id);
+    expect(completed.inventoryTransactionId).toBeTruthy();
+    expect(await getLocationOnHand(spare.id, location.id)).toBeCloseTo(2, 6);
+    const { qcHold, blocked } = await getQualityBalances(spare.id, location.id);
+    expect(qcHold).toBeCloseTo(0, 6);
+    expect(blocked).toBeCloseTo(0, 6);
+  });
+
+  it("a DAMAGED completion still keeps the returned quantity out of usable stock", async () => {
+    const { location, spare, operator, request } = await setupSpareIssue(1);
+    const requester = await prisma.stockRequest.findUniqueOrThrow({ where: { id: request.id } });
+
+    const reported = await reportSpareReturn({ requestId: request.id, materialId: spare.id, quantity: 1, returnedBy: "Rahul", reportedByUserId: requester.requestedByUserId });
+    await completeSpareReturn({ spareReturnId: reported.id, locationId: location.id, condition: "DAMAGED", processedByUserId: operator.id });
+
+    expect(await getLocationOnHand(spare.id, location.id)).toBeCloseTo(1, 6);
+    const { blocked } = await getQualityBalances(spare.id, location.id);
+    expect(blocked).toBeCloseTo(1, 6);
+  });
+
+  it("cannot complete the same return twice", async () => {
+    const { location, spare, operator, request } = await setupSpareIssue(1);
+    const requester = await prisma.stockRequest.findUniqueOrThrow({ where: { id: request.id } });
+
+    const reported = await reportSpareReturn({ requestId: request.id, materialId: spare.id, quantity: 1, returnedBy: "Rahul", reportedByUserId: requester.requestedByUserId });
+    await completeSpareReturn({ spareReturnId: reported.id, locationId: location.id, condition: "UNUSED", processedByUserId: operator.id });
+
+    await expect(
+      completeSpareReturn({ spareReturnId: reported.id, locationId: location.id, condition: "UNUSED", processedByUserId: operator.id })
+    ).rejects.toThrow(SpareReturnError);
+  });
+
+  it("a reported-but-not-yet-completed return already counts against what's still eligible to report", async () => {
+    const { spare, request } = await setupSpareIssue(2);
+    const requester = await prisma.stockRequest.findUniqueOrThrow({ where: { id: request.id } });
+
+    await reportSpareReturn({ requestId: request.id, materialId: spare.id, quantity: 1.5, returnedBy: "Rahul", reportedByUserId: requester.requestedByUserId });
+
+    const { remaining } = await getIssuedRemainingForRequest(request.id);
+    expect(remaining).toBeCloseTo(0.5, 6);
+    await expect(
+      reportSpareReturn({ requestId: request.id, materialId: spare.id, quantity: 1, returnedBy: "Rahul", reportedByUserId: requester.requestedByUserId })
+    ).rejects.toThrow(SpareReturnError);
   });
 });
 

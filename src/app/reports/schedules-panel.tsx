@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { Th, Td, EmptyState } from "@/components/ui";
+import { Modal } from "@/components/modal";
 import {
   actionCreateReportSchedule,
   actionUpdateReportSchedule,
@@ -60,7 +61,10 @@ function ScheduleForm({ schedule, users, onDone }: { schedule: Partial<ScheduleR
 
   return (
     <form
-      className="grid grid-cols-1 gap-3 rounded-md border border-border-soft bg-surface-raised p-3 sm:grid-cols-2"
+      // No box styling in the create case — that instance now sits inside a Modal, which
+      // already provides the border/background; the inline edit-row case still needs it since
+      // its own <td> wrapper has none.
+      className={`grid grid-cols-1 gap-3 sm:grid-cols-2 ${schedule ? "rounded-md border border-border-soft bg-surface-raised p-3" : ""}`}
       action={(fd) => {
         setError(null);
         if (schedule?.id) fd.set("id", schedule.id);
@@ -141,10 +145,10 @@ function ScheduleForm({ schedule, users, onDone }: { schedule: Partial<ScheduleR
       {error && <div className="text-sm text-[var(--status-critical)] sm:col-span-2">{error}</div>}
 
       <div className="flex gap-2 sm:col-span-2">
-        <button type="submit" disabled={pending} className="rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground disabled:opacity-40">
+        <button type="submit" disabled={pending} className="btn btn-primary btn-sm">
           {pending ? "Saving…" : "Save"}
         </button>
-        <button type="button" onClick={onDone} className="rounded-md border border-border px-4 py-1.5 text-sm text-muted hover:text-foreground">
+        <button type="button" onClick={onDone} className="btn btn-secondary btn-sm">
           Cancel
         </button>
       </div>
@@ -192,11 +196,13 @@ export function SchedulesPanel({ schedules, users }: { schedules: ScheduleRow[];
         Frequency, day, and time describe the intended cadence only. Nothing runs automatically; use &ldquo;Run Now&rdquo; to send a delivery immediately.
       </p>
       <div className="flex justify-end">
-        <button type="button" onClick={() => setCreating((v) => !v)} className="rounded-md border border-border px-3 py-1.5 text-sm text-muted hover:text-foreground">
-          {creating ? "Close" : "+ New Schedule"}
+        <button type="button" onClick={() => setCreating(true)} className="btn btn-secondary btn-sm">
+          + New Schedule
         </button>
       </div>
-      {creating && <ScheduleForm schedule={null} users={users} onDone={() => setCreating(false)} />}
+      <Modal open={creating} onClose={() => setCreating(false)} title="New Report Schedule">
+        <ScheduleForm schedule={null} users={users} onDone={() => setCreating(false)} />
+      </Modal>
 
       {schedules.length === 0 ? (
         <EmptyState title="No schedules yet" />

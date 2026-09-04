@@ -35,7 +35,7 @@ export function SpareReturnForm({
 
   return (
     <form
-      className="space-y-3 rounded-md border border-border-soft bg-surface-raised p-3"
+      className="space-y-3"
       action={(fd) => {
         setError(null);
         startTransition(async () => {
@@ -55,7 +55,7 @@ export function SpareReturnForm({
               setMaterialId(e.target.value);
               setRequestId("");
             }}
-            className="mt-1 block w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent"
+            className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent"
           >
             {materials.map((m) => (
               <option key={m.id} value={m.id}>{m.name}</option>
@@ -69,7 +69,7 @@ export function SpareReturnForm({
             value={requestId}
             onChange={(e) => setRequestId(e.target.value)}
             required
-            className="mt-1 block w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent"
+            className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent"
           >
             <option value="">Select…</option>
             {relevantRequests.map((r) => (
@@ -82,7 +82,7 @@ export function SpareReturnForm({
         </label>
         <label className="text-xs text-muted">
           Return to location
-          <select name="locationId" defaultValue={locations[0]?.id ?? ""} className="mt-1 block w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
+          <select name="locationId" defaultValue={locations[0]?.id ?? ""} className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
             {locations.map((l) => (
               <option key={l.id} value={l.id}>{l.name}</option>
             ))}
@@ -99,14 +99,14 @@ export function SpareReturnForm({
             required
             value={quantity}
             onChange={(e) => setQuantity(e.target.value)}
-            className="mt-1 block w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent"
+            className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent"
           />
         </label>
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
         <label className="text-xs text-muted">
           Condition
-          <select name="condition" defaultValue="UNUSED" className="mt-1 block w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
+          <select name="condition" defaultValue="UNUSED" className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
             {RETURN_CONDITIONS.map((c) => (
               <option key={c} value={c}>{c.replace("_", " ")}</option>
             ))}
@@ -114,25 +114,25 @@ export function SpareReturnForm({
         </label>
         <label className="text-xs text-muted">
           Returned by
-          <input name="returnedBy" required placeholder="Name" className="mt-1 block w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
+          <input name="returnedBy" required placeholder="Name" className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
         </label>
         <label className="text-xs text-muted">
           Reason
-          <input name="reason" placeholder="e.g. Job cancelled" className="mt-1 block w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
+          <input name="reason" placeholder="e.g. Job cancelled" className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
         </label>
         <label className="text-xs text-muted">
           Remarks
-          <input name="remarks" className="mt-1 block w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
+          <input name="remarks" className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
         </label>
       </div>
 
       {error && <div className="text-sm text-[var(--status-critical)]">{error}</div>}
 
       <div className="flex gap-2">
-        <button type="submit" disabled={pending || !requestId} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-40">
+        <button type="submit" disabled={pending || !requestId} className="btn btn-primary btn-md">
           {pending ? "Recording…" : "Return Spare"}
         </button>
-        <button type="button" onClick={onCancel} className="rounded-md border border-border px-4 py-2 text-sm text-muted hover:text-foreground">
+        <button type="button" onClick={onCancel} className="btn btn-secondary btn-md">
           Cancel
         </button>
       </div>

@@ -63,3 +63,16 @@ export async function postCountAdjustment(input: { physicalCountId: string; reas
   await reconcileQualityBalances(count.materialId, count.locationId);
   return tx;
 }
+
+/**
+ * The other branch of the Inventory Manager's review — ends the workflow for a submitted count
+ * without posting anything (Stock Rule: only an *approved* variance ever changes inventory).
+ * Mutually exclusive with postCountAdjustment: a count that's already posted or already rejected
+ * can't be rejected again.
+ */
+export async function rejectCountAdjustment(input: { physicalCountId: string; reason: string }) {
+  const count = await prisma.physicalCount.findUniqueOrThrow({ where: { id: input.physicalCountId } });
+  if (count.adjustmentTransactionId) throw new Error("This count has already been posted");
+  if (count.rejectedAt) throw new Error("This count has already been rejected");
+  return prisma.physicalCount.update({ where: { id: count.id }, data: { rejectedAt: new Date(), rejectionReason: input.reason } });
+}

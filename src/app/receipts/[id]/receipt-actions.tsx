@@ -27,12 +27,12 @@ export function ReceiptActions({ id, status }: { id: string; status: string }) {
               })
             }
             disabled={pending}
-            className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-40"
+            className="btn btn-primary btn-md"
           >
             {pending ? "Posting…" : "Post GRN"}
           </button>
         )}
-        <button onClick={() => setMode(mode === "cancel" ? "idle" : "cancel")} className="rounded-md border border-border px-4 py-2 text-sm text-muted hover:text-foreground">
+        <button onClick={() => setMode(mode === "cancel" ? "idle" : "cancel")} className="btn btn-secondary btn-md">
           {mode === "cancel" ? "Close" : status === "POSTED" ? "Cancel Receipt (reverses stock)" : "Cancel Draft"}
         </button>
       </div>
@@ -54,7 +54,7 @@ export function ReceiptActions({ id, status }: { id: string; status: string }) {
         >
           <input type="hidden" name="id" value={id} />
           <input name="reason" required placeholder="Reason (required)…" className="w-56 rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
-          <button type="submit" disabled={pending} className="rounded-md bg-[var(--status-critical-solid)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40">
+          <button type="submit" disabled={pending} className="btn btn-danger btn-sm">
             {pending ? "Cancelling…" : "Confirm Cancellation"}
           </button>
         </form>

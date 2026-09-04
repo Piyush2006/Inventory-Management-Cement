@@ -97,13 +97,13 @@ export async function StockMovementReportSection({ params }: { params: Record<st
               </span>
               <div className="flex items-center gap-1.5">
                 {page > 1 ? (
-                  <Link href={buildPageHref(params, page - 1)} className="rounded-md border border-border px-2.5 py-1 hover:text-foreground">←</Link>
+                  <Link href={buildPageHref(params, page - 1)} className="btn btn-secondary btn-xs">←</Link>
                 ) : (
                   <span className="rounded-md border border-border-soft px-2.5 py-1 opacity-40">←</span>
                 )}
                 <span className="px-2">Page {page} of {report.totalPages}</span>
                 {page < report.totalPages ? (
-                  <Link href={buildPageHref(params, page + 1)} className="rounded-md border border-border px-2.5 py-1 hover:text-foreground">→</Link>
+                  <Link href={buildPageHref(params, page + 1)} className="btn btn-secondary btn-xs">→</Link>
                 ) : (
                   <span className="rounded-md border border-border-soft px-2.5 py-1 opacity-40">→</span>
                 )}

@@ -13,7 +13,7 @@ export interface RequestReportRow {
   quantityRequested: number;
   deliveredQuantity: number;
   receivedQuantity: number;
-  remainingQuantity: number;
+  remainingQuantity: number | null;
   status: string;
   requestedByName: string;
   assignedToName: string | null;
@@ -87,7 +87,10 @@ export async function getRequestReport(filters: ReportFilters, scopeToUserId?: s
     quantityRequested: r.quantityRequested,
     deliveredQuantity: r.deliveredQuantity,
     receivedQuantity: r.receivedQuantity,
-    remainingQuantity: Math.max(0, r.quantityRequested - r.receivedQuantity),
+    // A rejected request never gets fulfilled — "300 MT remaining" would read as still-pending
+    // delivery, not as the dead end it actually is. null (not 0, which would misread as "fully
+    // received") renders as "—" in both the table and the CSV export below.
+    remainingQuantity: r.status === "REJECTED" ? null : Math.max(0, r.quantityRequested - r.receivedQuantity),
     status: r.status,
     requestedByName: r.requestedBy.name,
     assignedToName: r.assignedTo?.name ?? null,

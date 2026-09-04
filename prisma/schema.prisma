@@ -175,7 +175,7 @@ model InventoryBalance {
 // ---------------------------------------------------------------------------
 
 model PhysicalCount {
-  id                      String   @id @default(cuid())
+  id                      String    @id @default(cuid())
   locationId              String
   materialId              String
   countedQuantity         Float
@@ -184,7 +184,12 @@ model PhysicalCount {
   countedAt               DateTime
   note                    String?
   adjustmentTransactionId String?
-  createdAt               DateTime @default(now())
+  // Inventory Manager/Admin can reject a submitted count instead of approving it — ends the
+  // workflow for that count without posting anything. Mutually exclusive with
+  // adjustmentTransactionId being set; a count is either still pending, posted, or rejected.
+  rejectedAt              DateTime?
+  rejectionReason         String?
+  createdAt               DateTime  @default(now())
 
   location Location @relation(fields: [locationId], references: [id])
   material Material @relation(fields: [materialId], references: [id])
@@ -223,7 +228,8 @@ model User {
   dispatchesCancelled  Dispatch[]      @relation("DispatchCancelledBy")
   dispatchEvents       DispatchEvent[]
 
-  spareReturnsProcessed SpareReturn[]
+  spareReturnsReported  SpareReturn[] @relation("SpareReturnReportedBy")
+  spareReturnsProcessed SpareReturn[] @relation("SpareReturnProcessedBy")
 }
 
 // ---------------------------------------------------------------------------
@@ -361,26 +367,35 @@ model RequestEvent {
 // ---------------------------------------------------------------------------
 
 model SpareReturn {
-  id                     String   @id @default(cuid())
-  returnReference        String   @unique // RET-YYYYMMDD-XXXX, same convention as REQ-/DIS-/GRN-
+  id                     String    @id @default(cuid())
+  returnReference        String    @unique // RET-YYYYMMDD-XXXX, same convention as REQ-/DIS-/GRN-
   requestId              String // the original Spare Issue — every return must link to one
   originalIssueReference String // denormalized StockRequest.requestNumber, for display without a join
   materialId             String
   quantity               Float
-  locationId             String // where the returned stock is added back to
+  // REPORTED | COMPLETED (see SPARE_RETURN_STATUSES) — a Requester/Maintenance user reports a
+  // return with no inventory effect yet; a Store Operator then completes it (choosing the
+  // receiving location + verified condition), which is the only point stock actually moves.
+  // Defaults to COMPLETED so the original single-step "walk-in" path (Store Operator reports
+  // and completes in the same request) still works without every caller passing a status.
+  status                 String    @default("COMPLETED")
+  locationId             String? // where the returned stock is added back to — set at completion
   returnedBy             String // free text — who physically returned it (may not be a system user)
-  processedByUserId      String // the Store Operator (or Inventory Manager/Admin) who processed it
-  condition               String // RETURN_CONDITIONS — UNUSED | SERVICEABLE | DAMAGED | FOR_INSPECTION
-  reason                  String?
-  remarks                 String?
-  inventoryTransactionId  String   @unique // the RECEIPT InventoryTransaction this return posted
-  createdAt               DateTime @default(now())
+  reportedByUserId       String? // who reported the return (Requester, or the Store Operator on the fast path)
+  processedByUserId      String? // the Store Operator (or Admin) who completed it — null while REPORTED
+  condition              String? // RETURN_CONDITIONS — UNUSED | SERVICEABLE | DAMAGED | FOR_INSPECTION — set at completion
+  reason                 String?
+  remarks                String?
+  inventoryTransactionId String?   @unique // the RECEIPT InventoryTransaction this return posted — null while REPORTED
+  createdAt              DateTime  @default(now())
+  completedAt            DateTime?
 
-  request              StockRequest         @relation(fields: [requestId], references: [id])
-  material             Material             @relation(fields: [materialId], references: [id])
-  location             Location             @relation(fields: [locationId], references: [id])
-  processedBy          User                 @relation(fields: [processedByUserId], references: [id])
-  inventoryTransaction InventoryTransaction @relation(fields: [inventoryTransactionId], references: [id])
+  request              StockRequest          @relation(fields: [requestId], references: [id])
+  material             Material              @relation(fields: [materialId], references: [id])
+  location             Location?             @relation(fields: [locationId], references: [id])
+  reportedBy           User?                 @relation("SpareReturnReportedBy", fields: [reportedByUserId], references: [id])
+  processedBy          User?                 @relation("SpareReturnProcessedBy", fields: [processedByUserId], references: [id])
+  inventoryTransaction InventoryTransaction? @relation(fields: [inventoryTransactionId], references: [id])
 
   @@index([requestId])
   @@index([materialId])
