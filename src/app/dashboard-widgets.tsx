@@ -197,11 +197,11 @@ export function RequestStatusPanel({ rows }: { rows: { status: string; label: st
   );
 }
 
-export function StockWatchlistPanel({ rows }: { rows: { material: { id: string; name: string; uom: string; category: string }; currentStock: number; status: "HEALTHY" | "LOW" | "CRITICAL"; daysCover: number }[] }) {
+export function StockWatchlistPanel({ rows }: { rows: { material: { id: string; name: string; uom: string; category: string }; currentStock: number; status: "HEALTHY" | "LOW" | "CRITICAL"; daysSupply: number }[] }) {
   return (
     <Panel title="Stock Requiring Attention" action={<Link href="/inventory" className="text-xs text-accent hover:underline">View all →</Link>}>
       {rows.length === 0 ? (
-        <EmptyState title="No consumption history yet" body="Days of cover needs at least one recorded consumption to estimate a rate." />
+        <EmptyState title="No consumption history yet" body="Days of supply needs at least one recorded consumption to estimate a rate." />
       ) : (
         <div className="overflow-x-auto scrollbar-thin">
           <table className="w-full border-collapse">
@@ -211,7 +211,7 @@ export function StockWatchlistPanel({ rows }: { rows: { material: { id: string; 
                 <Th>Type</Th>
                 <Th className="text-right">Stock</Th>
                 <Th>Status</Th>
-                <Th className="text-right">Days Cover</Th>
+                <Th className="text-right">Days Supply</Th>
               </tr>
             </thead>
             <tbody>
@@ -223,7 +223,7 @@ export function StockWatchlistPanel({ rows }: { rows: { material: { id: string; 
                   <Td className="text-xs text-muted">{r.material.category === "SPARE" ? "Spare" : "Material"}</Td>
                   <Td className="text-right tabular">{formatNumber(r.currentStock)} {r.material.uom}</Td>
                   <Td><StatusBadge status={r.status} /></Td>
-                  <Td className="text-right tabular">{r.daysCover.toFixed(0)} days</Td>
+                  <Td className="text-right tabular">{r.daysSupply.toFixed(0)} days</Td>
                 </tr>
               ))}
             </tbody>

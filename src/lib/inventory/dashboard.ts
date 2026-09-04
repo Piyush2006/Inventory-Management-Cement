@@ -113,8 +113,8 @@ export async function getDashboardData() {
     })),
   ];
 
-  // 30-day consumption per material, batched — feeds the Days of Cover watchlist below without
-  // an N+1 computeDaysOfCover() call per material.
+  // 30-day consumption per material, batched — feeds the Days of Supply watchlist below without
+  // an N+1 computeDaysOfSupply() call per material.
   const since30 = new Date();
   since30.setDate(since30.getDate() - 30);
   const consumption30 = await prisma.inventoryTransaction.findMany({
@@ -124,18 +124,18 @@ export async function getDashboardData() {
   const consumption30ByMaterial = new Map<string, number>();
   for (const c of consumption30) consumption30ByMaterial.set(c.materialId, (consumption30ByMaterial.get(c.materialId) ?? 0) + c.quantity);
 
-  // "Stock Requiring Attention" — sorted by soonest-to-run-out (Days of Cover), not just
+  // "Stock Requiring Attention" — sorted by soonest-to-run-out (Days of Supply), not just
   // current threshold status, so a HEALTHY material that's burning down fast still shows up
   // before it becomes a problem. Materials with no consumption history have no rate to sort
   // by, so they're excluded here (they still show up in the main Inventory list).
   const stockWatchlist = materialRows
     .map((r) => {
       const dailyRate = (consumption30ByMaterial.get(r.material.id) ?? 0) / 30;
-      const daysCover = dailyRate > 1e-9 ? r.unrestrictedStock / dailyRate : null;
-      return { material: r.material, currentStock: r.currentStock, status: r.status, daysCover };
+      const daysSupply = dailyRate > 1e-9 ? r.unrestrictedStock / dailyRate : null;
+      return { material: r.material, currentStock: r.currentStock, status: r.status, daysSupply };
     })
-    .filter((r): r is typeof r & { daysCover: number } => r.daysCover != null)
-    .sort((a, b) => a.daysCover - b.daysCover)
+    .filter((r): r is typeof r & { daysSupply: number } => r.daysSupply != null)
+    .sort((a, b) => a.daysSupply - b.daysSupply)
     .slice(0, 6);
 
   // 14-day trend: total on-hand tonnage and daily consumption, for the 2 dashboard charts.

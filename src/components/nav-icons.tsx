@@ -2,6 +2,23 @@
 // (24x24 viewBox, stroke currentColor, strokeWidth 2). Needed so the collapsed (icon-only) sidebar
 // still identifies each item; the expanded sidebar shows these next to the existing text labels.
 
+// This app's own logo mark — an original design, not a reproduction of any real company's
+// registered trademark. Square, dark ground, bold initial, two accent bars beneath —
+// deliberately its own color pairing (the app's own --accent blue + an amber, not any real
+// brand's colors) rather than a copy of anyone else's identity.
+export function CompanyLogo({ size = 28 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 100 100" width={size} height={size} aria-hidden="true">
+      <rect width="100" height="100" rx="18" fill="#0a0d13" />
+      <text x="50" y="60" textAnchor="middle" fontFamily="var(--font-sans), sans-serif" fontWeight="800" fontSize="46" fill="#ffffff">
+        B
+      </text>
+      <rect x="14" y="72" width="72" height="8" rx="1" fill="#2f7fe0" />
+      <rect x="14" y="82" width="72" height="8" rx="1" fill="#f5a623" />
+    </svg>
+  );
+}
+
 export function DashboardIcon() {
   return (
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

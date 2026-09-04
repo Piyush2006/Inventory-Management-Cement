@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { IN_TRANSIT_LOCATION_TYPE } from "@/lib/domain/enums";
 import { classifyStockStatus } from "@/lib/inventory/status";
-import { computeDaysOfCover } from "@/lib/inventory/daysOfCover";
+import { computeDaysOfSupply } from "@/lib/inventory/daysOfSupply";
 
 // Small queries Bruce AI needs that don't already exist as a reusable single-material/whole-
 // catalog function elsewhere — same batched shape dashboard.ts/inventory/page.tsx already use
@@ -49,12 +49,12 @@ export async function getQualityHeld(status: "QC_HOLD" | "BLOCKED", materialId?:
   return [...byMaterial.entries()].map(([materialId, v]) => ({ materialId, ...v })).sort((a, b) => b.quantity - a.quantity);
 }
 
-/** Days of Cover across the whole active catalog, ascending (soonest to run out first) — small enough scale for one call per chat question, not a batched loop elsewhere. */
-export async function getLowestDaysOfCover(limit = 5) {
+/** Days of Supply across the whole active catalog, ascending (soonest to run out first) — small enough scale for one call per chat question, not a batched loop elsewhere. */
+export async function getLowestDaysOfSupply(limit = 5) {
   const materials = await prisma.material.findMany({ where: { active: true } });
-  const results = await Promise.all(materials.map((m) => computeDaysOfCover(m.id).then((r) => ({ material: m, ...r }))));
+  const results = await Promise.all(materials.map((m) => computeDaysOfSupply(m.id).then((r) => ({ material: m, ...r }))));
   return results
-    .filter((r) => !r.na && r.daysCover != null)
-    .sort((a, b) => a.daysCover! - b.daysCover!)
+    .filter((r) => !r.na && r.daysSupply != null)
+    .sort((a, b) => a.daysSupply! - b.daysSupply!)
     .slice(0, limit);
 }

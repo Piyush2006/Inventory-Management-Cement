@@ -87,7 +87,7 @@ export async function getTotalQualityBalances(materialId: string) {
   return { qcHold, blocked };
 }
 
-/** Network-wide unrestricted (usable) stock — the numerator Days of Cover and alerting use instead of raw On Hand. */
+/** Network-wide unrestricted (usable) stock — the numerator Days of Supply and alerting use instead of raw On Hand. */
 export async function getTotalUnrestrictedAvailable(materialId: string) {
   const [onHand, { qcHold, blocked }] = await Promise.all([getTotalOnHand(materialId), getTotalQualityBalances(materialId)]);
   return Math.max(0, onHand - qcHold - blocked);

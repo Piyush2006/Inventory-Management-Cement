@@ -8,6 +8,7 @@ import { ACCEPT_REJECT_ROLES, ROUTE_ROLES, ASSIGN_ROLES, SPARE_RETURN_REPORT_ROL
 import { getIssuedRemainingForRequest } from "@/lib/inventory/spareReturn";
 import { RequestActionPanel } from "./request-action-panel";
 import { SpareReturnReportPanel } from "./spare-return-report-panel";
+import { LifecycleGanttPanel } from "@/components/charts/lifecycle-gantt";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +58,16 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
 
   const remaining = request.quantityRequested - request.receivedQuantity;
   const deliveredNotYetReceived = request.deliveredQuantity - request.receivedQuantity;
+  const ganttEvents = request.events.map((e) => ({
+    id: e.id,
+    action: e.action,
+    timestamp: e.timestamp.toISOString(),
+    userName: e.user.name,
+    role: e.role,
+    quantity: e.quantity != null ? e.quantity : null,
+    reason: e.reason,
+  }));
+  const ganttNow = new Date().toISOString();
 
   // ACCEPT_REJECT_ROLES / ROUTE_ROLES / ASSIGN_ROLES already include Admin. For the
   // ownership-based checks below, Admin bypasses them explicitly — full access means acting
@@ -201,26 +212,7 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
         </Panel>
       </div>
 
-      <Panel title="Timeline">
-        {request.events.length === 0 ? (
-          <EmptyState title="No events yet" />
-        ) : (
-          <ol className="space-y-3 border-l border-border pl-4">
-            {request.events.map((e) => (
-              <li key={e.id} className="relative">
-                <span className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full bg-accent" />
-                <div className="text-xs text-muted-soft">{formatDateTime(e.timestamp)}</div>
-                <div className="text-sm font-medium text-foreground">{EVENT_LABEL[e.action] ?? e.action}</div>
-                <div className="text-xs text-muted">
-                  {e.user.name} ({e.role})
-                  {e.quantity != null ? ` — ${formatNumber(e.quantity)} ${request.material.uom}` : ""}
-                  {e.reason ? ` — ${e.reason}` : ""}
-                </div>
-              </li>
-            ))}
-          </ol>
-        )}
-      </Panel>
+      <LifecycleGanttPanel events={ganttEvents} labels={EVENT_LABEL} now={ganttNow} uom={request.material.uom} />
 
       <Panel title="Related Stock Movements">
         {relatedTransactions.length === 0 ? (

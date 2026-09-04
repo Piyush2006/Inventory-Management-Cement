@@ -32,7 +32,7 @@ export function TrendChart({
         <XAxis
           dataKey="date"
           tick={{ fontSize: 10, fill: "var(--muted-soft)" }}
-          tickFormatter={(v: string) => new Date(v).toLocaleDateString("en-AU", { day: "2-digit", month: "short" })}
+          tickFormatter={(v: string) => new Date(v).toLocaleDateString("en-AU", { day: "2-digit", month: "short", timeZone: "Asia/Kolkata" })}
           axisLine={{ stroke: "var(--border)" }}
           tickLine={false}
           minTickGap={30}
@@ -42,7 +42,7 @@ export function TrendChart({
           contentStyle={{ background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12, color: "var(--foreground)" }}
           labelStyle={{ color: "var(--foreground)" }}
           itemStyle={{ color: "var(--foreground)" }}
-          labelFormatter={(v) => (v ? new Date(String(v)).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }) : "")}
+          labelFormatter={(v) => (v ? new Date(String(v)).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }) : "")}
           formatter={(value) => [`${Number(value).toLocaleString()} ${unit}`, ""]}
         />
         {referenceLines.map((r, i) => (

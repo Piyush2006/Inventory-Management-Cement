@@ -28,7 +28,7 @@ export async function getConsumptionReport(filters: ReportFilters) {
   const to = filters.to ?? new Date();
   const from = filters.from ?? new Date(to.getTime() - DEFAULT_WINDOW_DAYS * 86400000);
   // Inclusive calendar-day span — never zero, so the average below is never a divide-by-zero.
-  // Mirrors daysOfCover.ts's own guard: only total-consumed-is-zero gets an "N/A", not an
+  // Mirrors daysOfSupply.ts's own guard: only total-consumed-is-zero gets an "N/A", not an
   // adaptive "days actually spanned by data" denominator.
   const spanDays = Math.max(1, Math.round((to.getTime() - from.getTime()) / 86400000) + 1);
 

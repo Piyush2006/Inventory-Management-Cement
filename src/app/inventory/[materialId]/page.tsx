@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { getTotalOnHand, getLocationBalances } from "@/lib/inventory/balance";
 import { getTotalUnrestrictedAvailable } from "@/lib/inventory/quality";
 import { classifyStockStatus } from "@/lib/inventory/status";
-import { computeDaysOfCover } from "@/lib/inventory/daysOfCover";
+import { computeDaysOfSupply } from "@/lib/inventory/daysOfSupply";
 import { Panel, KpiTile, Th, Td, EmptyState, LinkPill, OverstockBadge, InfoTooltip } from "@/components/ui";
 import { StatusBadge, RequestStatusBadge } from "@/components/status-badge";
 import { QualityPanel } from "./quality-panel";
@@ -30,7 +30,7 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
     getTotalUnrestrictedAvailable(materialId),
     getLocationBalances(materialId),
     prisma.qualityBalance.findMany({ where: { materialId } }),
-    computeDaysOfCover(materialId),
+    computeDaysOfSupply(materialId),
     prisma.inventoryTransaction.findMany({
       where: { materialId, transactionType: "CONSUMPTION" },
       include: { sourceLocation: true },
@@ -78,18 +78,18 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
       </div>
 
       {/* Primary summary — the single place headline stock numbers appear. Nothing below this
-          repeats Current Stock / Min Stock / Max Stock / Days of Cover. */}
+          repeats Current Stock / Min Stock / Max Stock / Days of Supply. */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <KpiTile label="Current Stock" value={`${formatNumber(currentStock)} ${material.uom}`} />
         <KpiTile label="Min Stock" value={material.minStock != null ? formatNumber(material.minStock) : "—"} />
         <KpiTile label="Max Stock" value={material.maxStock != null ? formatNumber(material.maxStock) : "—"} />
         <KpiTile
-          label="Days of Cover"
-          value={doc.na ? "N/A" : `${doc.daysCover?.toFixed(1)}d`}
+          label="Days of Supply"
+          value={doc.na ? "N/A" : `${doc.daysSupply?.toFixed(1)}d`}
           sublabel={doc.na ? "Insufficient consumption data" : `Based on ${formatNumber(doc.dailyConsumption)} ${material.uom}/day`}
           info={
-            <InfoTooltip label="Days of Cover definition">
-              <span className="mb-1 block font-medium text-foreground">Days of Cover</span>
+            <InfoTooltip label="Days of Supply definition">
+              <span className="mb-1 block font-medium text-foreground">Days of Supply</span>
               Estimated number of days the current usable stock will last based on the average daily consumption.
               <br />
               <br />
@@ -105,18 +105,6 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
         {overstock && <OverstockBadge />}
         <span className="text-xs text-muted">{reason}</span>
       </div>
-
-      {/* Explains the Days of Cover figure above — shown once, not repeated per KPI card. */}
-      <Panel title="Average Daily Consumption">
-        <div className="flex items-baseline gap-2">
-          <span className="text-2xl font-semibold tabular text-foreground">{doc.na ? "N/A" : `${formatNumber(doc.dailyConsumption)} ${material.uom}/day`}</span>
-          <InfoTooltip label="Average Daily Consumption definition">
-            <span className="mb-1 block font-medium text-foreground">Average Daily Consumption</span>
-            Average quantity consumed per day based on the last 30 days of consumption history.
-          </InfoTooltip>
-        </div>
-        <div className="mt-1 text-xs text-muted-soft">{doc.na ? "Insufficient consumption data" : "Based on the last 30 days of consumption history"}</div>
-      </Panel>
 
       {/* Where the stock is, and how much of it is restricted — the one place per-location
           figures appear, so a location is never listed twice on this page. */}

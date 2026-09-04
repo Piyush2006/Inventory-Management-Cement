@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { postMovement } from "@/lib/inventory/ledger";
-import { computeDaysOfCover } from "@/lib/inventory/daysOfCover";
+import { computeDaysOfSupply } from "@/lib/inventory/daysOfSupply";
 import { makeLocation, makeMaterial } from "./helpers";
 
-describe("days of cover", () => {
+describe("days of supply", () => {
   it("computes stock ÷ 30-day average daily consumption", async () => {
     const location = await makeLocation();
     const material = await makeMaterial({ category: "FUEL" });
@@ -13,10 +13,10 @@ describe("days of cover", () => {
       await postMovement({ materialId: material.id, transactionType: "CONSUMPTION", quantity: 400, uom: "MT", locationId: location.id, timestamp: new Date(Date.now() - i * 86400000) });
     }
 
-    const result = await computeDaysOfCover(material.id);
+    const result = await computeDaysOfSupply(material.id);
     expect(result.na).toBe(false);
     expect(result.dailyConsumption).toBeCloseTo(400, 0);
-    expect(result.daysCover).toBeCloseTo(0, 1); // fully consumed by the loop above
+    expect(result.daysSupply).toBeCloseTo(0, 1); // fully consumed by the loop above
   });
 
   it("returns N/A instead of dividing by zero when there's no consumption history", async () => {
@@ -24,9 +24,9 @@ describe("days of cover", () => {
     const material = await makeMaterial();
     await postMovement({ materialId: material.id, transactionType: "RECEIPT", quantity: 5000, uom: "MT", locationId: location.id });
 
-    const result = await computeDaysOfCover(material.id);
+    const result = await computeDaysOfSupply(material.id);
     expect(result.na).toBe(true);
     expect(result.naReason).toBe("NO_CONSUMPTION_DATA");
-    expect(result.daysCover).toBeNull();
+    expect(result.daysSupply).toBeNull();
   });
 });

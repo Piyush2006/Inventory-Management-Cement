@@ -13,6 +13,7 @@ import {
   ReportsIcon,
   NotificationsIcon,
   UsersIcon,
+  CompanyLogo,
 } from "@/components/nav-icons";
 
 const NAV_ITEMS = [
@@ -73,7 +74,7 @@ export function Sidebar({ role }: { role: string }) {
     >
       <div className={`mb-3 flex items-center px-2 ${expanded ? "justify-between" : "justify-center"}`}>
         <Link href="/" className="flex min-w-0 items-center gap-2">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-accent-soft text-sm font-bold text-accent">B</span>
+          <CompanyLogo size={28} />
           {expanded && (
             <div className="min-w-0 leading-tight">
               <div className="truncate text-sm font-semibold text-foreground">Boral Cement Plant</div>

@@ -21,6 +21,47 @@ import { triggerNotification } from "../src/lib/notifications/engine";
 import { checkStockThresholds } from "../src/lib/notifications/stockThreshold";
 import { postSpareReturn, reportSpareReturn } from "../src/lib/inventory/spareReturn";
 
+// Every lifecycle call above stamps `new Date()`, so back-to-back seed calls land within
+// milliseconds of each other — realistic for the admin steps (accept/route/assign happen fast)
+// but not for the physical transit in between, and it makes a fully completed request's own
+// Lifecycle Gantt chart on the Request Detail page look like a single sliver instead of a real
+// multi-day process. This spreads one already-created request's events across a real calendar
+// window using a realistic shape (quick approvals near the start, most of the elapsed time sits
+// between dispatch and delivery, quick receipt after) — display/reporting dates only, never
+// balances (those are running totals independent of a transaction's stamped timestamp).
+const LIFECYCLE_FRACTION: Record<string, number> = {
+  REQUEST_CREATED: 0, ACCEPTED: 0.01, ROUTED: 0.02, ASSIGNED: 0.05, IN_TRANSIT: 0.15,
+  DELIVERED: 0.9, RECEIVED: 0.95, PARTIALLY_RECEIVED: 0.95, COMPLETED: 0.96,
+};
+async function backdateLifecycle(requestId: string, startIso: string, spanHours: number) {
+  const request = await prisma.stockRequest.findUniqueOrThrow({ where: { id: requestId } });
+  const events = await prisma.requestEvent.findMany({ where: { stockRequestId: requestId }, orderBy: { timestamp: "asc" } });
+  const startMs = new Date(startIso).getTime();
+  const spanMs = spanHours * 3600_000;
+
+  const newTsByAction = new Map<string, Date>();
+  for (const e of events) {
+    const ts = new Date(startMs + (LIFECYCLE_FRACTION[e.action] ?? 0.5) * spanMs);
+    newTsByAction.set(e.action, ts);
+    await prisma.requestEvent.update({ where: { id: e.id }, data: { timestamp: ts } });
+  }
+  const lastTs = [...newTsByAction.values()].sort((a, b) => a.getTime() - b.getTime()).pop()!;
+  await prisma.stockRequest.update({
+    where: { id: requestId },
+    data: {
+      createdAt: newTsByAction.get("REQUEST_CREATED"), acceptedAt: newTsByAction.get("ACCEPTED"),
+      routedAt: newTsByAction.get("ROUTED"), assignedAt: newTsByAction.get("ASSIGNED"),
+      deliveredAt: newTsByAction.get("DELIVERED"), completedAt: newTsByAction.get("COMPLETED") ?? undefined,
+      updatedAt: lastTs,
+    },
+  });
+
+  const outTs = newTsByAction.get("IN_TRANSIT");
+  const inTs = newTsByAction.get("RECEIVED") ?? newTsByAction.get("PARTIALLY_RECEIVED");
+  if (outTs) await prisma.inventoryTransaction.updateMany({ where: { reference: request.requestNumber, transactionType: { in: ["CONSUMPTION", "TRANSFER_OUT"] } }, data: { timestamp: outTs } });
+  if (inTs) await prisma.inventoryTransaction.updateMany({ where: { reference: request.requestNumber, transactionType: "TRANSFER_IN" }, data: { timestamp: inTs } });
+}
+
 async function main() {
   await ensureSqliteTuned();
 
@@ -222,6 +263,7 @@ async function main() {
   await startDelivery(req1.id, suresh.id);
   await markDelivered(req1.id, suresh.id, "Delivered to Cement Mill 1 loading bay");
   await confirmReceipt(req1.id, 500, rahul.id);
+  await backdateLifecycle(req1.id, "2026-09-01T08:00:00Z", 24); // ~1-day round trip
 
   // REQ-002 — IN_TRANSIT: delivery under way, nothing confirmed yet.
   const req2 = await createStockRequest({ materialId: clinker.id, quantityRequested: 1000, requiredByDate: new Date(Date.now() + 3 * 86400000), fromLocationId: clinkerStore.id, toLocationId: cementMill1.id, reason: "Cement Mill 1 clinker feed", requestedByUserId: priya.id });
@@ -238,6 +280,7 @@ async function main() {
   await startDelivery(req3.id, suresh.id);
   await markDelivered(req3.id, suresh.id);
   await confirmReceipt(req3.id, 800, rahul.id);
+  await backdateLifecycle(req3.id, "2026-08-31T09:00:00Z", 48); // ~2-day round trip
 
   // REQ-004 — PARTIALLY_RECEIVED: matches the spec's own worked example (1000 requested, 1000 delivered, 600 received, 400 remaining).
   const req4 = await createStockRequest({ materialId: gypsum.id, quantityRequested: 1000, requiredByDate: new Date(Date.now() + 5 * 86400000), fromLocationId: gypsumStore.id, toLocationId: cementMill1.id, reason: "Extended production run", requestedByUserId: priya.id });
@@ -290,6 +333,7 @@ async function main() {
   await startDelivery(req11.id, suresh.id);
   await markDelivered(req11.id, suresh.id, "Delivered to Cement Mill 1 store");
   await confirmReceipt(req11.id, 80, priya.id);
+  await backdateLifecycle(req11.id, "2026-09-02T07:30:00Z", 30); // ~1.25-day round trip
 
   const req12 = await createStockRequest({ materialId: cementGp.id, quantityRequested: 150, requiredByDate: new Date(Date.now() + 2 * 86400000), fromLocationId: cementSilo1.id, toLocationId: packingArea.id, reason: "Packing run top-up", requestedByUserId: rahul.id });
   await acceptStockRequest(req12.id, neha.id);
@@ -298,6 +342,7 @@ async function main() {
   await startDelivery(req12.id, suresh.id);
   await markDelivered(req12.id, suresh.id, "Delivered to Packing Area");
   await confirmReceipt(req12.id, 150, rahul.id);
+  await backdateLifecycle(req12.id, "2026-09-01T15:00:00Z", 44); // ~1.8-day round trip
 
   // REQ-013 — ACCEPTED and already routed to a Store Supervisor, but no operator picked yet.
   // Demonstrates the two-hop chain's intermediate state: Inventory Manager's part is done,
@@ -436,7 +481,7 @@ async function main() {
   // One spare request left NEW_REQUEST — a live actionable item in the Inventory Manager's queue.
   await createStockRequest({ materialId: filterBag.id, quantityRequested: 50, requiredByDate: new Date(Date.now() + 5 * 86400000), fromLocationId: engineeringStore.id, toLocationId: maintenanceStore.id, reason: "Planned baghouse shutdown — filter bag replacement", requestedByUserId: priya.id, requestType: "SPARE", equipmentRef: "Baghouse BH-1" });
 
-  console.log("Building consumption history across the catalog — Days of Cover, Consumption History, and the dashboard trend charts all read this...");
+  console.log("Building consumption history across the catalog — Days of Supply, Consumption History, and the dashboard trend charts all read this...");
   async function consumptionHistory(materialId: string, locationId: string, uom: string, processName: string, opts: { days?: number; dailyRatePct?: number } = {}) {
     const days = opts.days ?? 18;
     const dailyRatePct = opts.dailyRatePct ?? 0.012;

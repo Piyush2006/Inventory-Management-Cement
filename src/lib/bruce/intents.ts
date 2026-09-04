@@ -8,7 +8,7 @@ import { getInventoryReport } from "@/lib/reports/inventory";
 import { OPEN_REQUEST_STATUSES } from "@/lib/domain/enums";
 import { formatQty, formatNumber } from "@/lib/format";
 import { extractPeriod } from "./entities";
-import { getMaterialsByStatus, getStockAtLocation, getQualityHeld, getLowestDaysOfCover } from "./queries";
+import { getMaterialsByStatus, getStockAtLocation, getQualityHeld, getLowestDaysOfSupply } from "./queries";
 import type { BruceIntent } from "./types";
 
 // A Dispatch has no "open" status list exported anywhere in the app (unlike Requests'
@@ -136,14 +136,16 @@ export const BRUCE_INTENTS: BruceIntent[] = [
     },
   },
   {
-    key: "lowest_days_of_cover",
+    key: "lowest_days_of_supply",
     requiresEntity: false,
-    match: (q) => q.includes("days of cover") || q.includes("days cover"),
+    // Accepts the older "days of cover" phrasing too — a chat matcher benefits from recognizing
+    // both, even though the app itself only ever displays/says "Days of Supply" now.
+    match: (q) => q.includes("days of supply") || q.includes("days supply") || q.includes("days of cover") || q.includes("days cover"),
     handle: async () => {
-      const rows = await getLowestDaysOfCover(5);
-      if (rows.length === 0) return { text: "There's insufficient consumption history to estimate Days of Cover for any material yet." };
-      const lines = rows.map((r) => `${r.material.name}: ${formatNumber(r.daysCover!, 1)} days`).join("\n");
-      return { text: `Lowest Days of Cover:\n${lines}`, links: [{ label: "View Inventory", href: "/inventory" }] };
+      const rows = await getLowestDaysOfSupply(5);
+      if (rows.length === 0) return { text: "There's insufficient consumption history to estimate Days of Supply for any material yet." };
+      const lines = rows.map((r) => `${r.material.name}: ${formatNumber(r.daysSupply!, 1)} days`).join("\n");
+      return { text: `Lowest Days of Supply:\n${lines}`, links: [{ label: "View Inventory", href: "/inventory" }] };
     },
   },
   {

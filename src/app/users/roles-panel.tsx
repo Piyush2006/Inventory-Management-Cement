@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Modal } from "@/components/modal";
-import { ViewIcon } from "@/components/ui";
+import { ViewIcon, ChevronIcon } from "@/components/ui";
 import {
   USER_ROLES,
   ROLE_LABELS,
@@ -66,17 +66,6 @@ const PERMISSION_GROUPS: { group: string; items: PermissionItem[] }[] = [
   },
 ];
 const TOTAL_PERMISSIONS = PERMISSION_GROUPS.reduce((n, g) => n + g.items.length, 0);
-
-function ChevronIcon({ open }: { open: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-      className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
-    >
-      <path d="m6 9 6 6 6-6" />
-    </svg>
-  );
-}
 
 function PermissionGroupSection({
   group,

@@ -42,6 +42,22 @@
      themes; reusing --status-critical for that purpose measured 4.35:1 in light mode but only
      3.22:1 in dark mode (WCAG fail) — this token exists for exactly that button case. */
   --status-critical-solid: #c62828;
+
+  /* One distinct hue per request lifecycle stage (Lifecycle Gantt chart) — deliberately a
+     separate categorical palette from --status-*, which groups several stages under one shared
+     semantic tone (e.g. Assigned/Delivered/Partially Received all read as "warning"). Here the
+     stage's identity is what needs to be visually distinguishable, not its health/urgency. */
+  --stage-created: #2563eb;
+  --stage-accepted: #0d9488;
+  --stage-routed: #4f46e5;
+  --stage-assigned: #d97706;
+  --stage-in-transit: #9333ea;
+  --stage-delivered: #ea580c;
+  --stage-received: #059669;
+  --stage-partial: #ca8a04;
+  --stage-completed: #16a34a;
+  --stage-rejected: #dc2626;
+  --stage-not-received: #db2777;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -80,6 +96,18 @@
     --status-exception-bg: rgba(176, 136, 255, 0.16);
     --status-unknown: #94a0b3;
     --status-unknown-bg: rgba(148, 160, 179, 0.14);
+
+    --stage-created: #60a5fa;
+    --stage-accepted: #2dd4bf;
+    --stage-routed: #818cf8;
+    --stage-assigned: #fbbf24;
+    --stage-in-transit: #c084fc;
+    --stage-delivered: #fb923c;
+    --stage-received: #34d399;
+    --stage-partial: #facc15;
+    --stage-completed: #4ade80;
+    --stage-rejected: #f87171;
+    --stage-not-received: #f472b6;
   }
 }
 
@@ -118,6 +146,18 @@
   --status-exception-bg: rgba(176, 136, 255, 0.16);
   --status-unknown: #94a0b3;
   --status-unknown-bg: rgba(148, 160, 179, 0.14);
+
+  --stage-created: #60a5fa;
+  --stage-accepted: #2dd4bf;
+  --stage-routed: #818cf8;
+  --stage-assigned: #fbbf24;
+  --stage-in-transit: #c084fc;
+  --stage-delivered: #fb923c;
+  --stage-received: #34d399;
+  --stage-partial: #facc15;
+  --stage-completed: #4ade80;
+  --stage-rejected: #f87171;
+  --stage-not-received: #f472b6;
 }
 
 @theme inline {
