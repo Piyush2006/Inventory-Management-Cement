@@ -94,6 +94,7 @@ export default async function StockOperationsPage() {
       id: m.id,
       timestamp: m.timestamp,
       materialName: m.material.name,
+      category: m.material.category,
       uom: m.uom,
       quantity: m.quantity,
       fromLocationName: m.sourceLocation?.name ?? null,
@@ -111,6 +112,7 @@ export default async function StockOperationsPage() {
     receiptDate: r.receiptDate,
     supplierName: r.supplier.name,
     materialName: r.material.name,
+    category: r.material.category,
     receivedQuantity: r.receivedQuantity,
     acceptedQuantity: r.acceptedQuantity,
     rejectedQuantity: r.rejectedQuantity,
@@ -131,6 +133,7 @@ export default async function StockOperationsPage() {
     dispatchReference: d.dispatchReference,
     materialId: d.materialId,
     materialName: d.material.name,
+    category: d.material.category,
     uom: d.material.uom,
     quantity: d.quantity,
     sourceLocationId: d.sourceLocationId,
@@ -141,34 +144,61 @@ export default async function StockOperationsPage() {
     createdAt: d.createdAt,
   }));
 
-  // Spare Return tab: recent SPARE-type requests, with what's on record as issued
-  // (deliveredQuantity) and already returned (batched sum of prior return RECEIPT rows
-  // keyed by reference), for the client-side over-return warn-and-confirm check.
+  // Spare Return tab: only requests that are actually spare ISSUES with something outstanding
+  // to return (requestType=SPARE, purpose=ISSUE, deliveredQuantity>0) — the prior version of
+  // this query offered every SPARE-type request regardless of purpose/whether anything had
+  // ever been issued. "Already returned" is now a real FK aggregate against SpareReturn.requestId,
+  // not a string match on InventoryTransaction.reference/reason.
   const spareRequests = canRecord
-    ? await prisma.stockRequest.findMany({ where: { requestType: "SPARE" }, orderBy: { createdAt: "desc" }, take: 50 })
+    ? await prisma.stockRequest.findMany({
+        where: { requestType: "SPARE", purpose: "ISSUE", deliveredQuantity: { gt: 0 } },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+      })
     : [];
-  const returnedByRequestNumber = new Map<string, number>();
+  const returnedByRequestId = new Map<string, number>();
   if (spareRequests.length > 0) {
-    const returnRows = await prisma.inventoryTransaction.groupBy({
-      by: ["reference"],
-      where: { transactionType: "RECEIPT", reference: { in: spareRequests.map((r) => r.requestNumber) }, reason: { contains: "Returned by" } },
+    const returnRows = await prisma.spareReturn.groupBy({
+      by: ["requestId"],
+      where: { requestId: { in: spareRequests.map((r) => r.id) } },
       _sum: { quantity: true },
     });
-    for (const r of returnRows) if (r.reference) returnedByRequestNumber.set(r.reference, r._sum.quantity ?? 0);
+    for (const r of returnRows) returnedByRequestId.set(r.requestId, r._sum.quantity ?? 0);
   }
   const spareRequestOptions = spareRequests.map((r) => ({
     id: r.id,
     requestNumber: r.requestNumber,
     materialId: r.materialId,
     issued: r.deliveredQuantity,
-    alreadyReturned: returnedByRequestNumber.get(r.requestNumber) ?? 0,
+    alreadyReturned: returnedByRequestId.get(r.id) ?? 0,
+  }));
+
+  // Spare Return List: the persisted SpareReturn records themselves, most recent first.
+  const spareReturns = canRecord
+    ? await prisma.spareReturn.findMany({
+        include: { material: true, location: true, processedBy: true },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+      })
+    : [];
+  const spareReturnRows = spareReturns.map((sr) => ({
+    id: sr.id,
+    returnReference: sr.returnReference,
+    originalIssueReference: sr.originalIssueReference,
+    materialName: sr.material.name,
+    uom: sr.material.uom,
+    quantity: sr.quantity,
+    returnedBy: sr.returnedBy,
+    condition: sr.condition,
+    locationName: sr.location.name,
+    processedByName: sr.processedBy.name,
+    createdAt: sr.createdAt,
   }));
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-lg font-semibold text-foreground">Stock Operations</h1>
-        <p className="mt-1 text-sm text-muted">Receive Material, Consume Stock, Transfer Stock, and Adjustment. Every action here creates a persisted ledger entry and updates inventory immediately.</p>
       </div>
 
       <Panel>
@@ -201,6 +231,7 @@ export default async function StockOperationsPage() {
               canApprove={canApprove}
               spareMaterials={spareMaterials.map((m) => ({ id: m.id, name: m.name, uom: m.uom }))}
               spareRequests={spareRequestOptions}
+              spareReturns={spareReturnRows}
             />
           </Suspense>
         ) : (

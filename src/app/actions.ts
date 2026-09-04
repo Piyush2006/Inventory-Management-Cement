@@ -31,12 +31,13 @@ import {
   markDispatched,
   cancelDispatch,
 } from "@/lib/inventory/dispatch";
-import { getCurrentUser, setCurrentUser, requireRole } from "@/lib/auth";
+import { getCurrentUser, setCurrentUser, clearCurrentUser, requireRole } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { ADJUSTMENT_ROLES, STOCK_OPS_ROLES, MASTER_DATA_ROLES, NOTIFICATION_CONFIG_ROLES, type TransactionType, type QualityStatus } from "@/lib/domain/enums";
+import { ADJUSTMENT_ROLES, STOCK_OPS_ROLES, MASTER_DATA_ROLES, NOTIFICATION_CONFIG_ROLES, REPORT_TYPES, REPORT_SCHEDULE_FREQUENCIES, REPORT_SCHEDULE_RECIPIENT_TYPES, REPORT_TYPE_LABELS, DAYS_OF_WEEK, ADMIN_ROLE, USER_ROLES, type TransactionType, type QualityStatus, type UserRole } from "@/lib/domain/enums";
 import { triggerNotification } from "@/lib/notifications/engine";
 import { checkStockThresholds } from "@/lib/notifications/stockThreshold";
 import type { NotificationEvent } from "@/lib/notifications/events";
+import { sendEmail } from "@/lib/notifications/email";
 import { answerBruceQuestion } from "@/lib/bruce/answer";
 import { postSpareReturn } from "@/lib/inventory/spareReturn";
 import type { ReturnCondition } from "@/lib/domain/enums";
@@ -253,6 +254,7 @@ function requestNotificationContext(updated: {
   requestedByUserId: string;
   assignedToUserId: string | null;
   routedToUserId: string | null;
+  requestType: string;
 }) {
   return {
     recordId: updated.id,
@@ -262,18 +264,59 @@ function requestNotificationContext(updated: {
     requestedByUserId: updated.requestedByUserId,
     assignedToUserId: updated.assignedToUserId ?? undefined,
     routedToUserId: updated.routedToUserId ?? undefined,
+    requestType: updated.requestType,
     link: `/requests/${updated.id}`,
   };
 }
 
-export async function actionSetCurrentUser(formData: FormData) {
+// ---------------------------------------------------------------------------
+// Users & Roles — Admin-only management of existing User records, plus the demo
+// "Login as User" session switch (the same currentUserId cookie mechanism that always
+// existed here, now actually gated — previously any session could switch to any user).
+// ---------------------------------------------------------------------------
+
+export async function actionLoginAsUser(formData: FormData) {
   try {
-    const userId = String(formData.get("userId"));
-    await setCurrentUser(userId);
+    const actingUser = await getCurrentUser();
+    requireRole(actingUser, [ADMIN_ROLE]);
+    const userId = String(formData.get("userId") || "");
+    if (!userId) return fail("Missing user");
+    const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    if (!target.active) return fail(`${target.name} is not active`);
+    await setCurrentUser(target.id);
     revalidatePath("/", "layout");
     return ok();
   } catch (e) {
     return fail(e instanceof Error ? e.message : "Failed to switch user");
+  }
+}
+
+export async function actionLogout() {
+  try {
+    await clearCurrentUser();
+    revalidatePath("/", "layout");
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to log out");
+  }
+}
+
+export async function actionUpdateUser(formData: FormData) {
+  try {
+    const actingUser = await getCurrentUser();
+    requireRole(actingUser, [ADMIN_ROLE]);
+    const id = String(formData.get("id") || "");
+    const name = String(formData.get("name") || "").trim();
+    const role = String(formData.get("role") || "") as UserRole;
+    const email = formData.get("email") ? String(formData.get("email")).trim() : null;
+    if (!id || !name || !role) return fail("Missing required fields");
+    if (!(USER_ROLES as readonly string[]).includes(role)) return fail("Invalid role");
+    await prisma.user.update({ where: { id }, data: { name, role, email } });
+    revalidatePath("/users");
+    revalidatePath("/", "layout");
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to update user");
   }
 }
 
@@ -437,9 +480,8 @@ export async function actionSaveMaterial(formData: FormData) {
     const category = String(formData.get("category") || "");
     const uom = String(formData.get("uom") || "");
     const minStock = formData.get("minStock") ? Number(formData.get("minStock")) : null;
-    const safetyStock = formData.get("safetyStock") ? Number(formData.get("safetyStock")) : null;
+    const maxStock = formData.get("maxStock") ? Number(formData.get("maxStock")) : null;
     const defaultLocationId = formData.get("defaultLocationId") ? String(formData.get("defaultLocationId")) : null;
-    const active = formData.get("active") === "on" || formData.get("active") === "true";
     // Spare Management — meaningful only for category = SPARE, but always read/stored as
     // submitted (null when blank) rather than gated here, so switching a material's category
     // never needs special-case handling.
@@ -449,12 +491,15 @@ export async function actionSaveMaterial(formData: FormData) {
     const criticality = formData.get("criticality") ? String(formData.get("criticality")) : null;
 
     if (!materialCode || !name || !category || !uom) return fail("Code, name, category, and UOM are required");
+    if (minStock != null && maxStock != null && minStock > maxStock) return fail("Min stock cannot be greater than max stock");
 
-    const data = { materialCode, name, category, uom, minStock, safetyStock, defaultLocationId, active, partNumber, manufacturer, equipmentRef, criticality };
+    const data = { materialCode, name, category, uom, minStock, maxStock, defaultLocationId, partNumber, manufacturer, equipmentRef, criticality };
     if (id) {
+      // Active status is no longer form-editable — it's only ever changed by the safety-checked
+      // actionDeleteMaterial below, so it's deliberately omitted here rather than read from the form.
       await prisma.material.update({ where: { id }, data });
     } else {
-      await prisma.material.create({ data });
+      await prisma.material.create({ data: { ...data, active: true } });
     }
     revalidatePath("/materials");
     revalidatePath("/inventory");
@@ -465,18 +510,21 @@ export async function actionSaveMaterial(formData: FormData) {
   }
 }
 
-export async function actionDeactivateMaterial(formData: FormData) {
+/** Delete presented to the user; internally a safety-checked soft delete (active -> false) — a
+ *  material with stock on hand can never be removed from view, only deactivated once it's empty. */
+export async function actionDeleteMaterial(formData: FormData) {
   try {
     const user = await getCurrentUser();
     requireRole(user, MASTER_DATA_ROLES);
     const id = String(formData.get("id"));
-    const active = formData.get("active") === "true";
-    await prisma.material.update({ where: { id }, data: { active } });
+    const balance = await prisma.inventoryBalance.findFirst({ where: { materialId: id, quantity: { gt: 1e-6 } } });
+    if (balance) return fail("Cannot delete a material that still holds stock — move or consume its stock first.");
+    await prisma.material.update({ where: { id }, data: { active: false } });
     revalidatePath("/materials");
     revalidatePath("/inventory");
     return ok();
   } catch (e) {
-    return fail(e instanceof Error ? e.message : "Failed to update material");
+    return fail(e instanceof Error ? e.message : "Failed to delete material");
   }
 }
 
@@ -488,14 +536,16 @@ export async function actionSaveLocation(formData: FormData) {
     const name = String(formData.get("name") || "").trim();
     const type = String(formData.get("type") || "");
     const capacity = formData.get("capacity") ? Number(formData.get("capacity")) : null;
-    const active = formData.get("active") === "on" || formData.get("active") === "true";
+    const capacityUom = capacity != null && formData.get("capacityUom") ? String(formData.get("capacityUom")) : null;
 
     if (!name || !type) return fail("Name and type are required");
 
     if (id) {
-      await prisma.location.update({ where: { id }, data: { name, type, capacity, active } });
+      // Active status is no longer form-editable — it's only ever changed by the safety-checked
+      // actionDeleteLocation below, so it's deliberately omitted here rather than read from the form.
+      await prisma.location.update({ where: { id }, data: { name, type, capacity, capacityUom } });
     } else {
-      await prisma.location.create({ data: { name, type, capacity, active } });
+      await prisma.location.create({ data: { name, type, capacity, capacityUom, active: true } });
     }
     revalidatePath("/locations");
     revalidatePath("/materials");
@@ -506,20 +556,21 @@ export async function actionSaveLocation(formData: FormData) {
   }
 }
 
-export async function actionDeactivateLocation(formData: FormData) {
+/** Delete presented to the user; internally a safety-checked soft delete (active -> false) — a
+ *  location with stock on hand can never be removed from view, only deactivated once it's empty. */
+export async function actionDeleteLocation(formData: FormData) {
   try {
     const user = await getCurrentUser();
     requireRole(user, MASTER_DATA_ROLES);
     const id = String(formData.get("id"));
-    const active = formData.get("active") === "true";
     const balance = await prisma.inventoryBalance.findFirst({ where: { locationId: id, quantity: { gt: 1e-6 } } });
-    if (!active && balance) return fail("Cannot deactivate a location that still holds stock");
-    await prisma.location.update({ where: { id }, data: { active } });
+    if (balance) return fail("Cannot delete a location that still holds stock — move or consume its stock first.");
+    await prisma.location.update({ where: { id }, data: { active: false } });
     revalidatePath("/locations");
     revalidatePath("/materials");
     return ok();
   } catch (e) {
-    return fail(e instanceof Error ? e.message : "Failed to update location");
+    return fail(e instanceof Error ? e.message : "Failed to delete location");
   }
 }
 
@@ -874,6 +925,142 @@ export async function actionDeleteNotificationRule(formData: FormData) {
 }
 
 // ---------------------------------------------------------------------------
+// Report Scheduling — a persisted delivery preference for an existing /reports tab, not a
+// real cron job (no background job runner in this sandboxed app). "Run Now" is the only way
+// a schedule is ever executed. Same CRUD shape as Notification Rules above, reusing the same
+// NOTIFICATION_CONFIG_ROLES gate (report scheduling is master-data-adjacent configuration,
+// no new role).
+// ---------------------------------------------------------------------------
+
+const TIME_OF_DAY_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function scheduleInputFromForm(formData: FormData) {
+  const reportType = String(formData.get("reportType") || "");
+  const frequency = String(formData.get("frequency") || "");
+  const timeOfDay = String(formData.get("timeOfDay") || "");
+  const dayOfWeek = frequency === "WEEKLY" && formData.get("dayOfWeek") ? String(formData.get("dayOfWeek")) : null;
+  const dayOfMonth = frequency === "MONTHLY" && formData.get("dayOfMonth") ? Number(formData.get("dayOfMonth")) : null;
+  const recipientType = String(formData.get("recipientType") || "");
+  const recipientRole = formData.get("recipientRole") ? String(formData.get("recipientRole")) : null;
+  const recipientUserId = formData.get("recipientUserId") ? String(formData.get("recipientUserId")) : null;
+  return { reportType, frequency, timeOfDay, dayOfWeek, dayOfMonth, recipientType, recipientRole, recipientUserId };
+}
+
+function validateScheduleInput(input: ReturnType<typeof scheduleInputFromForm>) {
+  if (!input.reportType || !input.frequency || !input.timeOfDay || !input.recipientType) return "Missing required fields";
+  if (!(REPORT_TYPES as readonly string[]).includes(input.reportType)) return "Invalid report type";
+  if (!(REPORT_SCHEDULE_FREQUENCIES as readonly string[]).includes(input.frequency)) return "Invalid frequency";
+  if (!TIME_OF_DAY_RE.test(input.timeOfDay)) return "Time must be in HH:mm format";
+  if (input.frequency === "WEEKLY" && !input.dayOfWeek) return "Choose a day of the week";
+  if (input.frequency === "WEEKLY" && input.dayOfWeek && !(DAYS_OF_WEEK as readonly string[]).includes(input.dayOfWeek)) return "Invalid day of week";
+  if (input.frequency === "MONTHLY" && (!input.dayOfMonth || input.dayOfMonth < 1 || input.dayOfMonth > 31)) return "Choose a day of the month (1-31)";
+  if (!(REPORT_SCHEDULE_RECIPIENT_TYPES as readonly string[]).includes(input.recipientType)) return "Invalid recipient type";
+  if (input.recipientType === "ROLE" && !input.recipientRole) return "Choose a role";
+  if (input.recipientType === "SPECIFIC_USER" && !input.recipientUserId) return "Choose a user";
+  return null;
+}
+
+export async function actionCreateReportSchedule(formData: FormData) {
+  try {
+    const user = await getCurrentUser();
+    requireRole(user, NOTIFICATION_CONFIG_ROLES);
+    const input = scheduleInputFromForm(formData);
+    const error = validateScheduleInput(input);
+    if (error) return fail(error);
+    await prisma.reportSchedule.create({ data: { ...input, status: "ENABLED" } });
+    revalidatePath("/reports");
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to create schedule");
+  }
+}
+
+export async function actionUpdateReportSchedule(formData: FormData) {
+  try {
+    const user = await getCurrentUser();
+    requireRole(user, NOTIFICATION_CONFIG_ROLES);
+    const id = String(formData.get("id"));
+    const input = scheduleInputFromForm(formData);
+    const error = !id ? "Missing required fields" : validateScheduleInput(input);
+    if (error) return fail(error);
+    await prisma.reportSchedule.update({ where: { id }, data: input });
+    revalidatePath("/reports");
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to update schedule");
+  }
+}
+
+export async function actionToggleReportSchedule(formData: FormData) {
+  try {
+    const user = await getCurrentUser();
+    requireRole(user, NOTIFICATION_CONFIG_ROLES);
+    const id = String(formData.get("id"));
+    const status = String(formData.get("status")) as "ENABLED" | "DISABLED";
+    await prisma.reportSchedule.update({ where: { id }, data: { status } });
+    revalidatePath("/reports");
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to update schedule status");
+  }
+}
+
+export async function actionDeleteReportSchedule(formData: FormData) {
+  try {
+    const user = await getCurrentUser();
+    requireRole(user, NOTIFICATION_CONFIG_ROLES);
+    const id = String(formData.get("id"));
+    await prisma.reportSchedule.delete({ where: { id } });
+    revalidatePath("/reports");
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to delete schedule");
+  }
+}
+
+// Simulated delivery — resolves recipients the same two ways a schedule can name them (Role
+// or Specific User; RELEVANT_USER has no analog here, see enums.ts), sends one simulated email
+// per recipient via the same transport notifications use, and logs one ReportScheduleRun row
+// summarizing the batch. No real report data/attachment is generated — a link back to the
+// report tab, same as how notification emails only ever carry a link, not embedded data.
+export async function actionRunReportSchedule(formData: FormData) {
+  try {
+    const user = await getCurrentUser();
+    requireRole(user, NOTIFICATION_CONFIG_ROLES);
+    const id = String(formData.get("id"));
+    const schedule = await prisma.reportSchedule.findUniqueOrThrow({ where: { id } });
+
+    const recipients =
+      schedule.recipientType === "ROLE"
+        ? await prisma.user.findMany({ where: { role: schedule.recipientRole ?? undefined, active: true } })
+        : schedule.recipientUserId
+          ? await prisma.user.findMany({ where: { id: schedule.recipientUserId, active: true } })
+          : [];
+
+    const reportLabel = REPORT_TYPE_LABELS[schedule.reportType as keyof typeof REPORT_TYPE_LABELS] ?? schedule.reportType;
+    const subject = `${reportLabel} Report`;
+    const body = `Your scheduled ${reportLabel} report is ready. View it at /reports?tab=${schedule.reportType}`;
+    let anyFailed = false;
+    for (const recipient of recipients) {
+      if (!recipient.email) {
+        anyFailed = true;
+        continue;
+      }
+      const result = await sendEmail({ to: recipient.email, subject, body });
+      if (result.status !== "SENT") anyFailed = true;
+    }
+
+    await prisma.reportScheduleRun.create({
+      data: { scheduleId: schedule.id, recipientCount: recipients.length, emailStatus: anyFailed ? "FAILED" : "SENT" },
+    });
+    revalidatePath("/reports");
+    return ok({ recipientCount: recipients.length });
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to run schedule");
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Spare Management — a spare return posts through the existing ledger/quality mechanisms
 // (src/lib/inventory/spareReturn.ts). Same STOCK_OPS_ROLES gate as every other recording action.
 // ---------------------------------------------------------------------------
@@ -882,14 +1069,15 @@ export async function actionPostSpareReturn(formData: FormData) {
   try {
     const user = await getCurrentUser();
     requireRole(user, STOCK_OPS_ROLES);
+    const requestId = String(formData.get("requestId") || "");
     const materialId = String(formData.get("materialId"));
     const locationId = String(formData.get("locationId"));
     const quantity = Number(formData.get("quantity"));
     const condition = String(formData.get("condition")) as ReturnCondition;
     const returnedBy = String(formData.get("returnedBy") || "");
-    const relatedRequestNumber = formData.get("relatedRequestNumber") ? String(formData.get("relatedRequestNumber")) : undefined;
+    const reason = formData.get("reason") ? String(formData.get("reason")) : undefined;
     const remarks = formData.get("remarks") ? String(formData.get("remarks")) : undefined;
-    if (!materialId || !locationId || Number.isNaN(quantity) || quantity <= 0 || !condition || !returnedBy.trim()) {
+    if (!requestId || !materialId || !locationId || Number.isNaN(quantity) || quantity <= 0 || !condition || !returnedBy.trim()) {
       return fail("Missing required fields");
     }
 
@@ -897,12 +1085,11 @@ export async function actionPostSpareReturn(formData: FormData) {
     if (material.category !== "SPARE") return fail(`${material.name} is not a spare`);
     if (!material.active) return fail(`${material.name} is not active`);
 
-    await postSpareReturn({ materialId, locationId, quantity, condition, returnedBy, relatedRequestNumber, remarks, userId: user.id });
+    const spareReturn = await postSpareReturn({ requestId, materialId, locationId, quantity, condition, returnedBy, reason, remarks, userId: user.id });
     await checkStockThresholds(materialId);
     revalidateInventoryViews();
     revalidatePath("/movements");
-    revalidatePath("/spares");
-    return ok();
+    return ok({ returnReference: spareReturn.returnReference });
   } catch (e) {
     return fail(e instanceof Error ? e.message : "Failed to record spare return");
   }

@@ -6,7 +6,7 @@ import { CountAdjustForm } from "./count-adjust-form";
 import { ReceiveMaterialPanel } from "./receive-material-panel";
 import { DispatchPanel } from "./dispatch-panel";
 import { PendingCountsPanel } from "./pending-counts-panel";
-import { SpareReturnForm } from "./spare-return-form";
+import { SpareReturnPanel } from "./spare-return-panel";
 import { Th, Td, EmptyState } from "@/components/ui";
 import { formatNumber, formatDateTime } from "@/lib/format";
 import type { TransactionType } from "@/lib/domain/enums";
@@ -15,16 +15,16 @@ type Material = { id: string; name: string; uom: string };
 type Location = { id: string; name: string };
 type BalanceRow = { materialId: string; materialName: string; uom: string; locationId: string; locationName: string; quantity: number; unrestrictedQuantity: number; tolerancePct: number };
 type Receipt = {
-  id: string; grnNumber: string; receiptDate: Date; supplierName: string; materialName: string;
+  id: string; grnNumber: string; receiptDate: Date; supplierName: string; materialName: string; category: string;
   receivedQuantity: number; acceptedQuantity: number; rejectedQuantity: number; status: string;
 };
 type DispatchRow = {
-  id: string; dispatchReference: string; materialId: string; materialName: string; uom: string; quantity: number;
+  id: string; dispatchReference: string; materialId: string; materialName: string; category: string; uom: string; quantity: number;
   sourceLocationId: string; sourceLocationName: string; customerDestination: string; status: string;
   assignedToName: string | null; createdAt: Date;
 };
 type MovementRow = {
-  id: string; timestamp: Date; materialName: string; uom: string; quantity: number;
+  id: string; timestamp: Date; materialName: string; category: string; uom: string; quantity: number;
   fromLocationName: string | null; toLocationName: string | null; reference: string | null;
 };
 type PendingCount = {
@@ -32,6 +32,10 @@ type PendingCount = {
   countedQuantity: number; tolerancePct: number; countedBy: string; note: string | null;
 };
 type SpareRequestOption = { id: string; requestNumber: string; materialId: string; issued: number; alreadyReturned: number };
+type SpareReturnRow = {
+  id: string; returnReference: string; originalIssueReference: string; materialName: string; uom: string; quantity: number;
+  returnedBy: string; condition: string; locationName: string; processedByName: string; createdAt: Date;
+};
 
 const TABS: { key: TransactionType | "RECEIVE" | "ADJUSTMENT" | "DISPATCH" | "SPARE_RETURN"; label: string }[] = [
   { key: "RECEIVE", label: "Receive Material" },
@@ -51,6 +55,7 @@ function RecentMovementsList({ rows, emptyLabel }: { rows: MovementRow[]; emptyL
           <tr className="border-b border-border-soft">
             <Th>Timestamp</Th>
             <Th>Material</Th>
+            <Th>Type</Th>
             <Th className="text-right">Quantity</Th>
             <Th>From</Th>
             <Th>To</Th>
@@ -59,9 +64,10 @@ function RecentMovementsList({ rows, emptyLabel }: { rows: MovementRow[]; emptyL
         </thead>
         <tbody>
           {rows.map((m) => (
-            <tr key={m.id} className="border-b border-border-soft last:border-0">
+            <tr key={m.id} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
               <Td className="whitespace-nowrap text-xs text-muted">{formatDateTime(m.timestamp)}</Td>
               <Td>{m.materialName}</Td>
+              <Td className="text-xs text-muted">{m.category === "SPARE" ? "Spare" : "Material"}</Td>
               <Td className="text-right tabular">{formatNumber(m.quantity)} {m.uom}</Td>
               <Td className="text-xs text-muted">{m.fromLocationName ?? "—"}</Td>
               <Td className="text-xs text-muted">{m.toLocationName ?? "—"}</Td>
@@ -91,6 +97,7 @@ export function MovementTabs({
   canApprove,
   spareMaterials,
   spareRequests,
+  spareReturns,
 }: {
   materials: Material[];
   locations: Location[];
@@ -108,6 +115,7 @@ export function MovementTabs({
   canApprove: boolean;
   spareMaterials: Material[];
   spareRequests: SpareRequestOption[];
+  spareReturns: SpareReturnRow[];
 }) {
   // Store Supervisor reaches this page now solely for Dispatch — the other tabs stay hidden for
   // anyone canRecord doesn't cover, same as before this feature existed.
@@ -150,7 +158,7 @@ export function MovementTabs({
       ) : tab === "DISPATCH" ? (
         <DispatchPanel dispatches={dispatches} materials={materials} locations={locations} balances={balances} canCreate={canCreateDispatch} />
       ) : tab === "SPARE_RETURN" ? (
-        <SpareReturnForm materials={spareMaterials} locations={locations} requests={spareRequests} />
+        <SpareReturnPanel materials={spareMaterials} locations={locations} requests={spareRequests} returns={spareReturns} />
       ) : (
         <div key={tab} className="space-y-6">
           <MovementForm type={tab} materials={materials} locations={locations} />

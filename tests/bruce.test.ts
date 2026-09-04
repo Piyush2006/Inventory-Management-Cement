@@ -40,7 +40,7 @@ describe("Bruce AI — entity extraction", () => {
 describe("Bruce AI — getMaterialRiskExplanation (single-material, not capped by the top-5 list)", () => {
   it("returns a real explanation for a material genuinely at risk", async () => {
     const location = await makeLocation();
-    const material = await makeMaterial({ safetyStock: 300 });
+    const material = await makeMaterial({ minStock: 300 });
     await postMovement({ materialId: material.id, transactionType: "OPENING_BALANCE", quantity: 250, uom: "MT", locationId: location.id, timestamp: new Date(Date.now() - 20 * 86400000) });
     for (let i = 10; i >= 1; i--) {
       await postMovement({ materialId: material.id, transactionType: "CONSUMPTION", quantity: 10, uom: "MT", locationId: location.id, timestamp: new Date(Date.now() - i * 86400000) });
@@ -52,22 +52,22 @@ describe("Bruce AI — getMaterialRiskExplanation (single-material, not capped b
 
   it("returns null for a healthy material with no risk signal", async () => {
     const location = await makeLocation();
-    const material = await makeMaterial({ safetyStock: 100 });
+    const material = await makeMaterial({ minStock: 100 });
     await postMovement({ materialId: material.id, transactionType: "OPENING_BALANCE", quantity: 5000, uom: "MT", locationId: location.id });
     expect(await getMaterialRiskExplanation(material.id)).toBeNull();
   });
 });
 
 describe("Bruce AI — answerBruceQuestion (end to end against real seeded data)", () => {
-  it("finds a material seeded LOW when asked which materials are below minimum stock", async () => {
+  it("finds a material below its minimum stock when asked which materials are below minimum stock", async () => {
     // makeMaterial()'s default name is the fixed string "Test Material" (only materialCode is
     // auto-unique) — since extractMaterial/entity-matching works by name and this vitest run
     // shares one SQLite file across every test file, an unnamed material here could collide
     // with an unrelated material of the same default name from another test. Explicit unique
     // names throughout this file for anything the intent engine needs to match by name.
     const location = await makeLocation();
-    const material = await makeMaterial({ name: "Bruce Below Min Cement", minStock: 500, safetyStock: 100 });
-    await postMovement({ materialId: material.id, transactionType: "OPENING_BALANCE", quantity: 300, uom: "MT", locationId: location.id }); // below min, above safety -> LOW
+    const material = await makeMaterial({ name: "Bruce Below Min Cement", minStock: 500 });
+    await postMovement({ materialId: material.id, transactionType: "OPENING_BALANCE", quantity: 300, uom: "MT", locationId: location.id }); // below min -> CRITICAL
     const supervisor = await makeUser({ role: "STORE_SUPERVISOR" });
 
     const answer = await answerBruceQuestion("which materials are below minimum stock?", { id: supervisor.id, role: supervisor.role });
@@ -76,7 +76,7 @@ describe("Bruce AI — answerBruceQuestion (end to end against real seeded data)
 
   it("answers 'why is <material> critical' with a real, material-specific explanation", async () => {
     const location = await makeLocation();
-    const material = await makeMaterial({ name: "Bruce Critical Clinker", safetyStock: 300 });
+    const material = await makeMaterial({ name: "Bruce Critical Clinker", minStock: 300 });
     await postMovement({ materialId: material.id, transactionType: "OPENING_BALANCE", quantity: 200, uom: "MT", locationId: location.id, timestamp: new Date(Date.now() - 20 * 86400000) });
     for (let i = 10; i >= 1; i--) {
       await postMovement({ materialId: material.id, transactionType: "CONSUMPTION", quantity: 5, uom: "MT", locationId: location.id, timestamp: new Date(Date.now() - i * 86400000) });
@@ -85,7 +85,7 @@ describe("Bruce AI — answerBruceQuestion (end to end against real seeded data)
 
     const answer = await answerBruceQuestion(`why is ${material.name} critical?`, { id: manager.id, role: manager.role });
     expect(answer.text).toContain(material.name);
-    expect(answer.text.toLowerCase()).toMatch(/safety stock|below/);
+    expect(answer.text.toLowerCase()).toMatch(/minimum stock|below/);
     expect(answer.links?.[0]?.href).toBe(`/inventory/${material.id}`);
   });
 

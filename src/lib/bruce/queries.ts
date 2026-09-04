@@ -20,7 +20,7 @@ export async function getMaterialsByStatus(status: "LOW" | "CRITICAL") {
     .map((m) => {
       const onHand = m.balances.reduce((s, b) => s + b.quantity, 0);
       const unrestricted = Math.max(0, onHand - (heldByMaterial.get(m.id) ?? 0));
-      const { status: s } = classifyStockStatus({ currentStock: unrestricted, minStock: m.minStock, safetyStock: m.safetyStock });
+      const { status: s } = classifyStockStatus({ currentStock: unrestricted, minStock: m.minStock });
       return { material: m, unrestricted, status: s };
     })
     .filter((r) => r.status === status);

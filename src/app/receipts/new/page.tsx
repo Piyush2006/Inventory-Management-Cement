@@ -27,7 +27,6 @@ export default async function NewReceiptPage({
     <div className="space-y-6">
       <div>
         <h1 className="text-lg font-semibold text-foreground">Receive Material</h1>
-        <p className="mt-1 text-sm text-muted">Create a GRN against an existing purchase reference, or receive directly with no PO.</p>
       </div>
 
       <Panel>

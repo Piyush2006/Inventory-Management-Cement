@@ -194,7 +194,7 @@ export function RulesPanel({ rules, users }: { rules: RuleRow[]; users: { id: st
                     </td>
                   </tr>
                 ) : (
-                  <tr key={rule.id} className="border-b border-border-soft last:border-0">
+                  <tr key={rule.id} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                     <Td>{NOTIFICATION_EVENT_META[rule.event as keyof typeof NOTIFICATION_EVENT_META]?.label ?? rule.event}</Td>
                     <Td className="text-xs text-muted">{recipientLabel(rule)}</Td>
                     <Td className="text-xs text-muted">{CHANNEL_LABEL[rule.channel] ?? rule.channel}</Td>

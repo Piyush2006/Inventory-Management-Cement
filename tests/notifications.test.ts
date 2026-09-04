@@ -118,12 +118,12 @@ describe("triggerNotification (engine)", () => {
 });
 
 describe("checkStockThresholds", () => {
-  it("fires STOCK_LOW once on the HEALTHY->LOW transition and does not re-fire while still LOW", async () => {
+  it("fires STOCK_CRITICAL once on the HEALTHY->CRITICAL transition and does not re-fire while still CRITICAL", async () => {
     const manager = await makeUser({ role: "INVENTORY_MANAGER" });
     const location = await makeLocation();
-    const material = await makeMaterial({ minStock: 500, safetyStock: 200 });
-    const rule = await makeRule({ event: "STOCK_LOW", recipientType: "ROLE", recipientRole: "INVENTORY_MANAGER" });
-    await postMovement({ materialId: material.id, transactionType: "OPENING_BALANCE", quantity: 400, uom: "MT", locationId: location.id }); // below minStock, above safetyStock -> LOW
+    const material = await makeMaterial({ minStock: 500 });
+    const rule = await makeRule({ event: "STOCK_CRITICAL", recipientType: "ROLE", recipientRole: "INVENTORY_MANAGER" });
+    await postMovement({ materialId: material.id, transactionType: "OPENING_BALANCE", quantity: 400, uom: "MT", locationId: location.id }); // below minStock -> CRITICAL
 
     // Scoped by this test's own ruleId — ROLE-based rules created by earlier tests in this
     // file stay ENABLED and also match any INVENTORY_MANAGER, so counting by
@@ -132,41 +132,38 @@ describe("checkStockThresholds", () => {
     let count = await prisma.notification.count({ where: { ruleId: rule.id, recipientUserId: manager.id } });
     expect(count).toBe(1);
 
-    await checkStockThresholds(material.id); // still LOW, no new balance change
+    await checkStockThresholds(material.id); // still CRITICAL, no new balance change
     count = await prisma.notification.count({ where: { ruleId: rule.id, recipientUserId: manager.id } });
     expect(count).toBe(1);
   });
 
-  it("fires again on LOW->CRITICAL, and re-fires on CRITICAL after recovering to HEALTHY", async () => {
+  it("re-fires on CRITICAL after recovering to HEALTHY, and never fires STOCK_LOW (unreachable now that Min is the only understock threshold)", async () => {
     const manager = await makeUser({ role: "INVENTORY_MANAGER" });
     const location = await makeLocation();
-    const material = await makeMaterial({ minStock: 500, safetyStock: 200 });
+    const material = await makeMaterial({ minStock: 500 });
     const lowRule = await makeRule({ event: "STOCK_LOW", recipientType: "ROLE", recipientRole: "INVENTORY_MANAGER" });
     const criticalRule = await makeRule({ event: "STOCK_CRITICAL", recipientType: "ROLE", recipientRole: "INVENTORY_MANAGER" });
-    const ruleIds = [lowRule.id, criticalRule.id];
 
     await postMovement({ materialId: material.id, transactionType: "OPENING_BALANCE", quantity: 1000, uom: "MT", locationId: location.id }); // HEALTHY
     await checkStockThresholds(material.id);
-    expect(await prisma.notification.count({ where: { ruleId: { in: ruleIds }, recipientUserId: manager.id } })).toBe(0);
+    expect(await prisma.notification.count({ where: { ruleId: criticalRule.id, recipientUserId: manager.id } })).toBe(0);
 
-    await postMovement({ materialId: material.id, transactionType: "CONSUMPTION", quantity: 700, uom: "MT", locationId: location.id }); // 300 left -> LOW
+    await postMovement({ materialId: material.id, transactionType: "CONSUMPTION", quantity: 700, uom: "MT", locationId: location.id }); // 300 left -> CRITICAL
     await checkStockThresholds(material.id);
-    expect(await prisma.notification.count({ where: { ruleId: { in: ruleIds }, recipientUserId: manager.id } })).toBe(1);
-
-    await postMovement({ materialId: material.id, transactionType: "CONSUMPTION", quantity: 200, uom: "MT", locationId: location.id }); // 100 left -> CRITICAL
-    await checkStockThresholds(material.id);
-    expect(await prisma.notification.count({ where: { ruleId: { in: ruleIds }, recipientUserId: manager.id } })).toBe(2);
+    expect(await prisma.notification.count({ where: { ruleId: criticalRule.id, recipientUserId: manager.id } })).toBe(1);
 
     await postMovement({ materialId: material.id, transactionType: "RECEIPT", quantity: 1000, uom: "MT", locationId: location.id }); // back to HEALTHY
     await checkStockThresholds(material.id);
-    expect(await prisma.notification.count({ where: { ruleId: { in: ruleIds }, recipientUserId: manager.id } })).toBe(2); // recovery doesn't fire
+    expect(await prisma.notification.count({ where: { ruleId: criticalRule.id, recipientUserId: manager.id } })).toBe(1); // recovery doesn't fire
 
     await postMovement({ materialId: material.id, transactionType: "CONSUMPTION", quantity: 900, uom: "MT", locationId: location.id }); // CRITICAL again
     await checkStockThresholds(material.id);
-    expect(await prisma.notification.count({ where: { ruleId: { in: ruleIds }, recipientUserId: manager.id } })).toBe(3); // re-fires
+    expect(await prisma.notification.count({ where: { ruleId: criticalRule.id, recipientUserId: manager.id } })).toBe(2); // re-fires
+
+    expect(await prisma.notification.count({ where: { ruleId: lowRule.id, recipientUserId: manager.id } })).toBe(0);
   });
 
-  it("never fires and never writes MaterialAlertState for a material with no minStock/safetyStock", async () => {
+  it("never fires and never writes MaterialAlertState for a material with no minStock", async () => {
     const location = await makeLocation();
     const material = await makeMaterial(); // no thresholds
     await postMovement({ materialId: material.id, transactionType: "OPENING_BALANCE", quantity: 10, uom: "MT", locationId: location.id });

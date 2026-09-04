@@ -14,13 +14,13 @@ export async function ConsumptionReportSection({ params }: { params: Record<stri
   ]);
 
   const { from, to } = parseDateRangeParams(params.from, params.to);
-  const report = await getConsumptionReport({ from, to, materialId: params.materialId, locationId: params.locationId });
+  const report = await getConsumptionReport({ from, to, materialId: params.materialId, locationId: params.locationId, category: params.category });
 
   return (
     <div className="space-y-4">
       <ReportFilterBar
         tab="consumption"
-        fields={["dateRange", "material", "location"]}
+        fields={["dateRange", "material", "location", "category"]}
         params={params}
         materials={materials.map((m) => ({ value: m.id, label: m.name }))}
         locations={locations.map((l) => ({ value: l.id, label: l.name }))}
@@ -31,8 +31,8 @@ export async function ConsumptionReportSection({ params }: { params: Record<stri
         action={
           <ExportCsvButton
             filename="consumption-detail.csv"
-            headers={["Date", "Material", "Location", "Consumed Quantity", "UOM", "Reference"]}
-            rows={report.detailRows.map((r) => [formatDateTime(r.timestamp), r.materialName, r.locationName, formatNumber(r.quantity), r.uom, r.reference ?? ""])}
+            headers={["Date", "Material", "Category", "Location", "Consumed Quantity", "UOM", "Reference"]}
+            rows={report.detailRows.map((r) => [formatDateTime(r.timestamp), r.materialName, r.category.replace("_", " "), r.locationName, formatNumber(r.quantity), r.uom, r.reference ?? ""])}
           />
         }
       >
@@ -44,14 +44,16 @@ export async function ConsumptionReportSection({ params }: { params: Record<stri
               <thead>
                 <tr className="border-b border-border-soft">
                   <Th>Material</Th>
+                  <Th>Category</Th>
                   <Th className="text-right">Total Consumed</Th>
                   <Th className="text-right">Average Daily Consumption</Th>
                 </tr>
               </thead>
               <tbody>
                 {report.aggregateRows.map((r) => (
-                  <tr key={r.materialId} className="border-b border-border-soft last:border-0">
+                  <tr key={r.materialId} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                     <Td>{r.materialName}</Td>
+                    <Td className="text-xs text-muted">{r.category.replace("_", " ")}</Td>
                     <Td className="text-right tabular">{formatNumber(r.totalConsumed)} {r.uom}</Td>
                     <Td className="text-right tabular">{formatNumber(r.averageDailyConsumption, 1)} {r.uom}/day</Td>
                   </tr>
@@ -72,6 +74,7 @@ export async function ConsumptionReportSection({ params }: { params: Record<stri
                 <tr className="border-b border-border-soft">
                   <Th>Date</Th>
                   <Th>Material</Th>
+                  <Th>Category</Th>
                   <Th>Location</Th>
                   <Th className="text-right">Consumed Quantity</Th>
                   <Th>Reference</Th>
@@ -79,9 +82,10 @@ export async function ConsumptionReportSection({ params }: { params: Record<stri
               </thead>
               <tbody>
                 {report.detailRows.map((r) => (
-                  <tr key={r.id} className="border-b border-border-soft last:border-0">
+                  <tr key={r.id} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                     <Td className="whitespace-nowrap text-xs text-muted">{formatDateTime(r.timestamp)}</Td>
                     <Td>{r.materialName}</Td>
+                    <Td className="text-xs text-muted">{r.category.replace("_", " ")}</Td>
                     <Td className="text-xs text-muted">{r.locationName}</Td>
                     <Td className="text-right tabular">{formatNumber(r.quantity)} {r.uom}</Td>
                     <Td className="text-xs text-muted-soft">{r.reference ?? "—"}</Td>

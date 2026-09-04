@@ -26,6 +26,7 @@ async function main() {
 
   console.log("Wiping existing data...");
   await prisma.$transaction([
+    prisma.spareReturn.deleteMany(),
     prisma.notification.deleteMany(),
     prisma.notificationRule.deleteMany(),
     prisma.materialAlertState.deleteMany(),
@@ -48,8 +49,8 @@ async function main() {
   ]);
 
   console.log("Creating locations...");
-  async function loc(name: string, type: string, capacity?: number) {
-    return prisma.location.create({ data: { name, type, capacity } });
+  async function loc(name: string, type: string, capacity?: number, capacityUom?: string) {
+    return prisma.location.create({ data: { name, type, capacity, capacityUom: capacity != null ? capacityUom ?? "MT" : undefined } });
   }
   const limestoneStockpileA = await loc("Limestone Stockpile A", "STOCKPILE");
   const coalYard = await loc("Coal Yard", "YARD");
@@ -72,45 +73,48 @@ async function main() {
   const amit = await prisma.user.create({ data: { name: "Amit", role: "STORE_SUPERVISOR" } });
   const suresh = await prisma.user.create({ data: { name: "Suresh", role: "STORE_OPERATOR" } });
   const neha = await prisma.user.create({ data: { name: "Neha", role: "INVENTORY_MANAGER" } });
-  await prisma.user.create({ data: { name: "Admin", role: "ADMIN" } });
+  await prisma.user.create({ data: { name: "John", role: "ADMIN" } });
 
   console.log("Creating materials...");
   async function mat(input: {
-    code: string; name: string; category: string; uom: string; minStock?: number; safetyStock?: number; defaultLocationId?: string;
+    code: string; name: string; category: string; uom: string; minStock?: number; maxStock?: number; defaultLocationId?: string;
     // Spare Management — meaningful only for category = SPARE.
     partNumber?: string; manufacturer?: string; equipmentRef?: string; criticality?: string;
   }) {
     return prisma.material.create({
       data: {
         materialCode: input.code, name: input.name, category: input.category, uom: input.uom,
-        minStock: input.minStock, safetyStock: input.safetyStock, defaultLocationId: input.defaultLocationId,
+        minStock: input.minStock, maxStock: input.maxStock, defaultLocationId: input.defaultLocationId,
         partNumber: input.partNumber, manufacturer: input.manufacturer, equipmentRef: input.equipmentRef, criticality: input.criticality,
       },
     });
   }
-  const limestone = await mat({ code: "RM-LIM", name: "Limestone", category: "RAW_MATERIAL", uom: "MT", minStock: 10000, safetyStock: 8000, defaultLocationId: limestoneStockpileA.id });
+  const limestone = await mat({ code: "RM-LIM", name: "Limestone", category: "RAW_MATERIAL", uom: "MT", minStock: 10000, maxStock: 25000, defaultLocationId: limestoneStockpileA.id });
   await mat({ code: "RM-SHL", name: "Shale", category: "RAW_MATERIAL", uom: "MT" });
-  const ironCorrective = await mat({ code: "RM-IRC", name: "Iron Corrective", category: "RAW_MATERIAL", uom: "MT", minStock: 100, safetyStock: 40, defaultLocationId: maintenanceStore.id });
-  const sand = await mat({ code: "RM-SND", name: "Sand", category: "RAW_MATERIAL", uom: "MT", minStock: 100, safetyStock: 40, defaultLocationId: maintenanceStore.id });
-  const coal = await mat({ code: "FL-COL", name: "Coal", category: "FUEL", uom: "MT", minStock: 1000, safetyStock: 600, defaultLocationId: coalYard.id });
-  const altFuel = await mat({ code: "FL-ALT", name: "Alternative Fuel", category: "FUEL", uom: "MT", minStock: 150, safetyStock: 100, defaultLocationId: altFuelBunker.id });
-  const gypsum = await mat({ code: "AD-GYP", name: "Gypsum", category: "ADDITIVE", uom: "MT", minStock: 800, safetyStock: 500, defaultLocationId: gypsumStore.id });
-  const flyAsh = await mat({ code: "AD-FLA", name: "Fly Ash", category: "ADDITIVE", uom: "MT", minStock: 100, safetyStock: 40, defaultLocationId: maintenanceStore.id });
-  const slag = await mat({ code: "AD-SLG", name: "Slag", category: "ADDITIVE", uom: "MT", minStock: 100, safetyStock: 40, defaultLocationId: maintenanceStore.id });
+  const ironCorrective = await mat({ code: "RM-IRC", name: "Iron Corrective", category: "RAW_MATERIAL", uom: "MT", minStock: 100, maxStock: 300, defaultLocationId: maintenanceStore.id });
+  const sand = await mat({ code: "RM-SND", name: "Sand", category: "RAW_MATERIAL", uom: "MT", minStock: 100, maxStock: 300, defaultLocationId: maintenanceStore.id });
+  const coal = await mat({ code: "FL-COL", name: "Coal", category: "FUEL", uom: "MT", minStock: 1000, maxStock: 3000, defaultLocationId: coalYard.id });
+  const altFuel = await mat({ code: "FL-ALT", name: "Alternative Fuel", category: "FUEL", uom: "MT", minStock: 150, maxStock: 400, defaultLocationId: altFuelBunker.id });
+  const gypsum = await mat({ code: "AD-GYP", name: "Gypsum", category: "ADDITIVE", uom: "MT", minStock: 800, maxStock: 2500, defaultLocationId: gypsumStore.id });
+  const flyAsh = await mat({ code: "AD-FLA", name: "Fly Ash", category: "ADDITIVE", uom: "MT", minStock: 100, maxStock: 300, defaultLocationId: maintenanceStore.id });
+  const slag = await mat({ code: "AD-SLG", name: "Slag", category: "ADDITIVE", uom: "MT", minStock: 100, maxStock: 300, defaultLocationId: maintenanceStore.id });
   await mat({ code: "IN-RWM", name: "Raw Meal", category: "INTERMEDIATE", uom: "MT" });
-  const clinker = await mat({ code: "IN-CLK", name: "Clinker", category: "INTERMEDIATE", uom: "MT", minStock: 2000, safetyStock: 1000, defaultLocationId: clinkerStore.id });
-  const cementGp = await mat({ code: "FG-CGP", name: "Cement GP", category: "FINISHED_GOODS", uom: "MT", minStock: 1000, safetyStock: 500, defaultLocationId: cementSilo1.id });
-  const cementGb = await mat({ code: "FG-CGB", name: "Cement GB", category: "FINISHED_GOODS", uom: "MT", minStock: 800, safetyStock: 400, defaultLocationId: cementSilo2.id });
-  const cementHe = await mat({ code: "FG-CHE", name: "Cement HE", category: "FINISHED_GOODS", uom: "MT", minStock: 600, safetyStock: 200, defaultLocationId: cementSilo3.id });
-  const cementBag = await mat({ code: "PK-BAG", name: "20 kg Cement Bag", category: "PACKING", uom: "Nos", minStock: 20000, safetyStock: 10000, defaultLocationId: packingArea.id });
+  const clinker = await mat({ code: "IN-CLK", name: "Clinker", category: "INTERMEDIATE", uom: "MT", minStock: 2000, maxStock: 5000, defaultLocationId: clinkerStore.id });
+  const cementGp = await mat({ code: "FG-CGP", name: "Cement GP", category: "FINISHED_GOODS", uom: "MT", minStock: 1000, maxStock: 3000, defaultLocationId: cementSilo1.id });
+  const cementGb = await mat({ code: "FG-CGB", name: "Cement GB", category: "FINISHED_GOODS", uom: "MT", minStock: 800, maxStock: 2500, defaultLocationId: cementSilo2.id });
+  const cementHe = await mat({ code: "FG-CHE", name: "Cement HE", category: "FINISHED_GOODS", uom: "MT", minStock: 600, maxStock: 1800, defaultLocationId: cementSilo3.id });
+  const cementBag = await mat({ code: "PK-BAG", name: "20 kg Cement Bag", category: "PACKING", uom: "Nos", minStock: 20000, maxStock: 60000, defaultLocationId: packingArea.id });
 
   console.log("Creating spares — a spare IS a Material (category = SPARE), not a separate entity...");
-  const bearing = await mat({ code: "BRG-6205", name: "Ball Bearing 6205-2RS (SKF)", category: "SPARE", uom: "Nos", minStock: 4, safetyStock: 2, defaultLocationId: engineeringStore.id, partNumber: "6205-2RS", manufacturer: "SKF", equipmentRef: "Conveyor C-102", criticality: "IMPORTANT" });
-  const idlerRoller = await mat({ code: "IDL-089", name: "Conveyor Idler Roller", category: "SPARE", uom: "Nos", minStock: 10, safetyStock: 6, defaultLocationId: engineeringStore.id, partNumber: "IDL-089", manufacturer: "Metso", equipmentRef: "Conveyor C-102", criticality: "NORMAL" });
-  const filterBag = await mat({ code: "FLT-BAG", name: "Baghouse Filter Bag", category: "SPARE", uom: "Nos", minStock: 200, safetyStock: 120, defaultLocationId: engineeringStore.id, partNumber: "FLT-BAG", manufacturer: "Donaldson", equipmentRef: "Baghouse BH-1", criticality: "IMPORTANT" });
-  const burnerTip = await mat({ code: "BRN-TIP", name: "Kiln Burner Tip", category: "SPARE", uom: "Nos", minStock: 1, safetyStock: 1, defaultLocationId: engineeringStore.id, partNumber: "BRN-TIP", manufacturer: "FLSmidth", equipmentRef: "Kiln 6", criticality: "CRITICAL" });
-  const gearboxOil = await mat({ code: "GBX-OIL", name: "Gearbox Oil ISO VG320", category: "SPARE", uom: "MT", minStock: 2, safetyStock: 1, defaultLocationId: engineeringStore.id, partNumber: "GBX-OIL", manufacturer: "Shell", equipmentRef: "Mill Gearboxes", criticality: "NORMAL" });
-  const girthGearBolt = await mat({ code: "GGB-M42", name: "Girth Gear Bolt M42", category: "SPARE", uom: "Nos", minStock: 24, safetyStock: 12, defaultLocationId: engineeringStore.id, partNumber: "GGB-M42", manufacturer: "Unbrako", equipmentRef: "Kiln 6 Girth Gear", criticality: "IMPORTANT" });
+  const bearing = await mat({ code: "BRG-6205", name: "Ball Bearing 6205-2RS (SKF)", category: "SPARE", uom: "Nos", minStock: 4, maxStock: 15, defaultLocationId: engineeringStore.id, partNumber: "6205-2RS", manufacturer: "SKF", equipmentRef: "Conveyor C-102", criticality: "IMPORTANT" });
+  const idlerRoller = await mat({ code: "IDL-089", name: "Conveyor Idler Roller", category: "SPARE", uom: "Nos", minStock: 10, maxStock: 25, defaultLocationId: engineeringStore.id, partNumber: "IDL-089", manufacturer: "Metso", equipmentRef: "Conveyor C-102", criticality: "NORMAL" });
+  const filterBag = await mat({ code: "FLT-BAG", name: "Baghouse Filter Bag", category: "SPARE", uom: "Nos", minStock: 200, maxStock: 400, defaultLocationId: engineeringStore.id, partNumber: "FLT-BAG", manufacturer: "Donaldson", equipmentRef: "Baghouse BH-1", criticality: "IMPORTANT" });
+  const burnerTip = await mat({ code: "BRN-TIP", name: "Kiln Burner Tip", category: "SPARE", uom: "Nos", minStock: 1, maxStock: 5, defaultLocationId: engineeringStore.id, partNumber: "BRN-TIP", manufacturer: "FLSmidth", equipmentRef: "Kiln 6", criticality: "CRITICAL" });
+  const gearboxOil = await mat({ code: "GBX-OIL", name: "Gearbox Oil ISO VG320", category: "SPARE", uom: "MT", minStock: 2, maxStock: 6, defaultLocationId: engineeringStore.id, partNumber: "GBX-OIL", manufacturer: "Shell", equipmentRef: "Mill Gearboxes", criticality: "NORMAL" });
+  // maxStock deliberately below where this spare's seeded history settles (40, see below) —
+  // the one live overstock demo, same "always ship a working example" pattern as every other
+  // seeded scenario in this file.
+  const girthGearBolt = await mat({ code: "GGB-M42", name: "Girth Gear Bolt M42", category: "SPARE", uom: "Nos", minStock: 24, maxStock: 30, defaultLocationId: engineeringStore.id, partNumber: "GGB-M42", manufacturer: "Unbrako", equipmentRef: "Kiln 6 Girth Gear", criticality: "IMPORTANT" });
 
   console.log("Posting opening balances — dated ~25 days ago (plant baseline), well before the 14-day trend charts' window...");
   const openingBalanceDate = new Date(Date.now() - 25 * 86400000);
@@ -398,7 +402,7 @@ async function main() {
 
   // The one complete demo story per §9: Breakdown -> issue -> confirm -> partial DAMAGED return,
   // sitting in Blocked with the full audit trail visible on the request detail and quality panel.
-  const bearingDemoRequest = await createStockRequest({ materialId: bearing.id, quantityRequested: 2, requiredByDate: new Date(Date.now() + 1 * 86400000), priority: "URGENT", fromLocationId: engineeringStore.id, toLocationId: maintenanceStore.id, reason: "Breakdown", requestedByUserId: rahul.id, requestType: "SPARE", equipmentRef: "Conveyor C-102" });
+  const bearingDemoRequest = await createStockRequest({ materialId: bearing.id, quantityRequested: 2, requiredByDate: new Date(Date.now() + 1 * 86400000), priority: "URGENT", fromLocationId: engineeringStore.id, purpose: "ISSUE", issuedTo: "Conveyor C-102 breakdown crew", reason: "Breakdown", requestedByUserId: rahul.id, requestType: "SPARE", equipmentRef: "Conveyor C-102" });
   await acceptStockRequest(bearingDemoRequest.id, neha.id);
   await routeToSupervisor(bearingDemoRequest.id, amit.id, neha.id);
   await assignOperator(bearingDemoRequest.id, suresh.id, amit.id);
@@ -406,8 +410,8 @@ async function main() {
   await markDelivered(bearingDemoRequest.id, suresh.id, "Delivered to Conveyor C-102 breakdown crew");
   await confirmReceipt(bearingDemoRequest.id, 2, rahul.id);
   await postSpareReturn({
-    materialId: bearing.id, locationId: engineeringStore.id, quantity: 1, condition: "DAMAGED",
-    returnedBy: "Suresh", relatedRequestNumber: bearingDemoRequest.requestNumber,
+    requestId: bearingDemoRequest.id, materialId: bearing.id, locationId: engineeringStore.id, quantity: 1, condition: "DAMAGED",
+    returnedBy: "Suresh", reason: "Breakdown repair — damaged part swapped out",
     remarks: "Bearing found damaged during installation — race visibly cracked", userId: suresh.id,
   });
 

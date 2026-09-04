@@ -20,24 +20,27 @@ export async function checkStockThresholds(materialId: string): Promise<void> {
   try {
     const material = await prisma.material.findUnique({ where: { id: materialId } });
     if (!material) return;
-    // A material with neither threshold set can never be classified LOW/CRITICAL — skip
-    // entirely rather than writing a permanently-HEALTHY MaterialAlertState row on every call.
-    if (material.minStock == null && material.safetyStock == null) return;
+    // A material with no minStock set can never be classified CRITICAL — skip entirely rather
+    // than writing a permanently-HEALTHY MaterialAlertState row on every call.
+    if (material.minStock == null) return;
 
     const currentStock = await getTotalUnrestrictedAvailable(materialId);
-    const { status } = classifyStockStatus({ currentStock, minStock: material.minStock, safetyStock: material.safetyStock });
+    const { status } = classifyStockStatus({ currentStock, minStock: material.minStock, maxStock: material.maxStock });
 
     const previous = await prisma.materialAlertState.findUnique({ where: { materialId } });
     const lastStatus = previous?.lastStatus ?? "HEALTHY";
 
     if (SEVERITY[status] > SEVERITY[lastStatus]) {
+      // LOW can no longer be produced by classifyStockStatus (Min is now the only understock
+      // threshold), so STOCK_LOW is unreachable here — kept only so nothing breaks if that ever
+      // changes. CRITICAL is the one reachable transition.
       const event = status === "CRITICAL" ? "STOCK_CRITICAL" : status === "LOW" ? "STOCK_LOW" : null;
       if (event) {
         await triggerNotification(event, {
           recordId: material.id,
           materialId: material.id,
           currentStock,
-          minimumStock: status === "CRITICAL" ? (material.safetyStock ?? undefined) : (material.minStock ?? undefined),
+          minimumStock: material.minStock ?? undefined,
           link: `/inventory/${material.id}`,
         });
       }

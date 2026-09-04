@@ -25,7 +25,7 @@ export async function StockMovementReportSection({ params }: { params: Record<st
   ]);
 
   const { from, to } = parseDateRangeParams(params.from, params.to);
-  const filters = { from, to, materialId: params.materialId, locationId: params.locationId, operation: params.operation, reference: params.reference, userId: params.userId };
+  const filters = { from, to, materialId: params.materialId, locationId: params.locationId, operation: params.operation, reference: params.reference, userId: params.userId, category: params.category };
   const page = Math.max(1, Number(params.page) || 1);
   const [report, exportRows] = await Promise.all([
     getStockMovementReport(filters, page),
@@ -36,7 +36,7 @@ export async function StockMovementReportSection({ params }: { params: Record<st
     <div className="space-y-4">
       <ReportFilterBar
         tab="movement"
-        fields={["dateRange", "material", "location", "operation", "reference", "user"]}
+        fields={["dateRange", "material", "location", "operation", "reference", "user", "category"]}
         params={params}
         materials={materials.map((m) => ({ value: m.id, label: m.name }))}
         locations={locations.map((l) => ({ value: l.id, label: l.name }))}
@@ -49,8 +49,8 @@ export async function StockMovementReportSection({ params }: { params: Record<st
         action={
           <ExportCsvButton
             filename="stock-movement.csv"
-            headers={["Date", "Material", "Operation", "Quantity", "UOM", "From Location", "To Location", "Reference", "User"]}
-            rows={exportRows.map((r) => [formatDateTime(r.timestamp), r.materialName, operationLabelForType(r.transactionType), formatNumber(r.quantity), r.uom, r.fromLocationName ?? "", r.toLocationName ?? "", r.reference ?? "", r.userName ?? ""])}
+            headers={["Date", "Material", "Category", "Operation", "Quantity", "UOM", "From Location", "To Location", "Reference", "User"]}
+            rows={exportRows.map((r) => [formatDateTime(r.timestamp), r.materialName, r.category.replace("_", " "), operationLabelForType(r.transactionType), formatNumber(r.quantity), r.uom, r.fromLocationName ?? "", r.toLocationName ?? "", r.reference ?? "", r.userName ?? ""])}
           />
         }
       >
@@ -64,6 +64,7 @@ export async function StockMovementReportSection({ params }: { params: Record<st
                   <tr className="border-b border-border-soft">
                     <Th>Date</Th>
                     <Th>Material</Th>
+                    <Th>Category</Th>
                     <Th>Operation</Th>
                     <Th className="text-right">Quantity</Th>
                     <Th>From Location</Th>
@@ -74,9 +75,10 @@ export async function StockMovementReportSection({ params }: { params: Record<st
                 </thead>
                 <tbody>
                   {report.rows.map((r) => (
-                    <tr key={r.id} className="border-b border-border-soft last:border-0">
+                    <tr key={r.id} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                       <Td className="whitespace-nowrap text-xs text-muted">{formatDateTime(r.timestamp)}</Td>
                       <Td>{r.materialName}</Td>
+                      <Td className="text-xs text-muted">{r.category.replace("_", " ")}</Td>
                       <Td className="text-xs text-muted">{operationLabelForType(r.transactionType)}</Td>
                       <Td className="text-right tabular">{formatNumber(r.quantity)} {r.uom}</Td>
                       <Td className="text-xs text-muted">{r.fromLocationName ?? "—"}</Td>

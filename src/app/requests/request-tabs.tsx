@@ -3,25 +3,20 @@
 import { useState, type ReactNode } from "react";
 
 export function RequestTabs({
-  actionLabel,
   newRequestContent,
-  actionContent,
   openContent,
   historyContent,
 }: {
-  actionLabel: string;
   newRequestContent: ReactNode;
-  actionContent: ReactNode;
   openContent: ReactNode;
   historyContent: ReactNode;
 }) {
   const TABS = [
-    { key: "action", label: actionLabel },
+    { key: "new", label: "+ New Request" },
     { key: "open", label: "Open Requests" },
     { key: "history", label: "Request History" },
-    { key: "new", label: "+ New Request" },
   ] as const;
-  const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("action");
+  const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("new");
 
   return (
     <div className="space-y-4">
@@ -40,10 +35,9 @@ export function RequestTabs({
         ))}
       </div>
 
-      {tab === "action" && actionContent}
+      {tab === "new" && newRequestContent}
       {tab === "open" && openContent}
       {tab === "history" && historyContent}
-      {tab === "new" && newRequestContent}
     </div>
   );
 }

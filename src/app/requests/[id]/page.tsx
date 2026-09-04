@@ -213,7 +213,7 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
               </thead>
               <tbody>
                 {relatedTransactions.map((t) => (
-                  <tr key={t.id} className="border-b border-border-soft last:border-0">
+                  <tr key={t.id} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                     <Td className="whitespace-nowrap text-xs text-muted">{formatDateTime(t.timestamp)}</Td>
                     <Td className="text-xs text-muted">{t.transactionType.replace("_", " ")}</Td>
                     <Td className="text-right tabular">{formatNumber(t.quantity)} {t.uom}</Td>

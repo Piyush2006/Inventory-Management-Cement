@@ -14,13 +14,13 @@ export async function InventoryReportSection({ params }: { params: Record<string
   ]);
 
   const { from, to } = parseDateRangeParams(params.from, params.to);
-  const report = await getInventoryReport({ from, to, materialId: params.materialId, locationId: params.locationId });
+  const report = await getInventoryReport({ from, to, materialId: params.materialId, locationId: params.locationId, category: params.category });
 
   return (
     <div className="space-y-4">
       <ReportFilterBar
         tab="inventory"
-        fields={["dateRange", "material", "location"]}
+        fields={["dateRange", "material", "location", "category"]}
         params={params}
         materials={materials.map((m) => ({ value: m.id, label: m.name }))}
         locations={locations.map((l) => ({ value: l.id, label: l.name }))}
@@ -46,8 +46,8 @@ export async function InventoryReportSection({ params }: { params: Record<string
         action={
           <ExportCsvButton
             filename="inventory-report.csv"
-            headers={["Material", "UOM", "Opening Stock", "Received", "Consumed", "Transfer In", "Transfer Out", "Dispatched", "Adjustments", "Closing Stock"]}
-            rows={report.materialRows.map((r) => [r.materialName, r.uom, formatNumber(r.opening), formatNumber(r.received), formatNumber(r.consumed), formatNumber(r.transferIn), formatNumber(r.transferOut), formatNumber(r.dispatched), formatNumber(r.adjustments), formatNumber(r.closing)])}
+            headers={["Material", "Category", "UOM", "Opening Stock", "Received", "Consumed", "Transfer In", "Transfer Out", "Dispatched", "Adjustments", "Closing Stock"]}
+            rows={report.materialRows.map((r) => [r.materialName, r.category.replace("_", " "), r.uom, formatNumber(r.opening), formatNumber(r.received), formatNumber(r.consumed), formatNumber(r.transferIn), formatNumber(r.transferOut), formatNumber(r.dispatched), formatNumber(r.adjustments), formatNumber(r.closing)])}
           />
         }
       >
@@ -60,6 +60,7 @@ export async function InventoryReportSection({ params }: { params: Record<string
                 <thead>
                   <tr className="border-b border-border-soft">
                     <Th>Material</Th>
+                    <Th>Category</Th>
                     <Th className="text-right">Opening Stock</Th>
                     <Th className="text-right">Received</Th>
                     <Th className="text-right">Consumed</Th>
@@ -72,8 +73,9 @@ export async function InventoryReportSection({ params }: { params: Record<string
                 </thead>
                 <tbody>
                   {report.materialRows.map((r) => (
-                    <tr key={r.materialId} className="border-b border-border-soft last:border-0">
+                    <tr key={r.materialId} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                       <Td>{r.materialName} <span className="text-xs text-muted-soft">({r.uom})</span></Td>
+                      <Td className="text-xs text-muted">{r.category.replace("_", " ")}</Td>
                       <Td className="text-right tabular">{formatNumber(r.opening)}</Td>
                       <Td className="text-right tabular">{formatNumber(r.received)}</Td>
                       <Td className="text-right tabular">{formatNumber(r.consumed)}</Td>

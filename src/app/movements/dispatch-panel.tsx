@@ -11,7 +11,7 @@ type Material = { id: string; name: string; uom: string };
 type Location = { id: string; name: string };
 type BalanceRow = { materialId: string; uom: string; locationId: string; unrestrictedQuantity: number };
 type DispatchRow = {
-  id: string; dispatchReference: string; materialId: string; materialName: string; uom: string; quantity: number;
+  id: string; dispatchReference: string; materialId: string; materialName: string; category: string; uom: string; quantity: number;
   sourceLocationId: string; sourceLocationName: string; customerDestination: string; status: string;
   assignedToName: string | null; createdAt: Date;
 };
@@ -164,6 +164,7 @@ export function DispatchPanel({
               <tr className="border-b border-border-soft">
                 <Th>Reference</Th>
                 <Th>Material</Th>
+                <Th>Type</Th>
                 <Th className="text-right">Quantity</Th>
                 <Th>Source</Th>
                 <Th>Customer / Destination</Th>
@@ -174,9 +175,10 @@ export function DispatchPanel({
             </thead>
             <tbody>
               {filtered.map((d) => (
-                <tr key={d.id} className="border-b border-border-soft last:border-0">
+                <tr key={d.id} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                   <Td className="text-xs text-muted-soft">{d.dispatchReference}</Td>
                   <Td>{d.materialName}</Td>
+                  <Td className="text-xs text-muted">{d.category === "SPARE" ? "Spare" : "Material"}</Td>
                   <Td className="text-right tabular">{formatNumber(d.quantity)} {d.uom}</Td>
                   <Td className="text-xs text-muted">{d.sourceLocationName}</Td>
                   <Td className="text-xs text-muted">{d.customerDestination}</Td>

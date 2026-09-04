@@ -23,7 +23,7 @@ export interface MaterialRiskInput {
   onHand: number;
   qcHold: number;
   blocked: number;
-  safetyStock: number | null;
+  minStock: number | null;
   dailyRate: number; // trailing TRAILING_WINDOW_DAYS-day average consumption
   recentDailyRate: number; // trailing RECENT_WINDOW_DAYS-day average consumption
   distinctConsumptionDays: number; // number of distinct days with a CONSUMPTION row in the trailing window
@@ -36,7 +36,7 @@ const RECENT_WINDOW_DAYS = 3;
 const ANOMALY_MIN_DISTINCT_DAYS = 5; // enough history for a recent-vs-trailing comparison to mean something
 const ANOMALY_MIN_TRAILING_QTY = 5; // ignore materials whose 30-day total is too small to be meaningful
 const ANOMALY_THRESHOLD_PCT = 25;
-const APPROACHING_SAFETY_STOCK_DAYS = 7;
+const APPROACHING_MIN_STOCK_DAYS = 7;
 const MEDIUM_RISK_DAYS_OF_COVER = 10;
 const QUALITY_HOLD_FRACTION_THRESHOLD = 0.2;
 const MAX_INSIGHTS = 5;
@@ -49,25 +49,25 @@ const MAX_INSIGHTS = 5;
  * threshold is crossed.
  */
 export function evaluateMaterialRisk(input: MaterialRiskInput): InventoryInsight | null {
-  const { materialId, materialName, uom, onHand, qcHold, blocked, safetyStock, dailyRate, recentDailyRate, distinctConsumptionDays, totalTrailingConsumption, incomingQuantity } = input;
+  const { materialId, materialName, uom, onHand, qcHold, blocked, minStock, dailyRate, recentDailyRate, distinctConsumptionDays, totalTrailingConsumption, incomingQuantity } = input;
   const unrestricted = Math.max(0, onHand - qcHold - blocked);
   const daysCover = dailyRate > 1e-9 ? unrestricted / dailyRate : null;
 
   const incomingNote =
-    safetyStock != null && unrestricted < safetyStock
-      ? incomingQuantity >= safetyStock - unrestricted
+    minStock != null && unrestricted < minStock
+      ? incomingQuantity >= minStock - unrestricted
         ? ` ${formatQty(incomingQuantity, uom)} is already on order.`
         : " No sufficient incoming stock is currently on order."
       : "";
 
-  // Type 1 (highest priority): already at/below safety stock, or projected to cross it soon.
+  // Type 1 (highest priority): already at/below minimum stock, or projected to cross it soon.
   // "Already below" fires on the threshold alone, with or without consumption history — a
-  // material can be below safety stock the moment it's counted (e.g. seeded that way, or
+  // material can be below minimum stock the moment it's counted (e.g. seeded that way, or
   // never yet consumed), and that fact doesn't stop being true just because there's no rate to
   // project forward with. Only the *approaching* branch (not yet below, but will be soon) needs
   // a real dailyRate, since projecting "when" requires a rate.
-  if (safetyStock != null) {
-    const alreadyBelow = unrestricted <= safetyStock;
+  if (minStock != null) {
+    const alreadyBelow = unrestricted <= minStock;
     if (alreadyBelow) {
       return {
         materialId,
@@ -75,31 +75,31 @@ export function evaluateMaterialRisk(input: MaterialRiskInput): InventoryInsight
         type: "HIGH_RISK",
         typeLabel: "High Inventory Risk",
         explanation: dailyRate > 1e-9
-          ? `Usable stock is ${formatQty(unrestricted, uom)}, already at or below the ${formatQty(safetyStock, uom)} safety stock level. Average consumption is ${formatQty(dailyRate, uom)}/day.${incomingNote}`
-          : `Usable stock is ${formatQty(unrestricted, uom)}, already at or below the ${formatQty(safetyStock, uom)} safety stock level. No recent consumption has been recorded, so a depletion rate can't be estimated.${incomingNote}`,
+          ? `Usable stock is ${formatQty(unrestricted, uom)}, already at or below the ${formatQty(minStock, uom)} minimum stock level. Average consumption is ${formatQty(dailyRate, uom)}/day.${incomingNote}`
+          : `Usable stock is ${formatQty(unrestricted, uom)}, already at or below the ${formatQty(minStock, uom)} minimum stock level. No recent consumption has been recorded, so a depletion rate can't be estimated.${incomingNote}`,
         metrics: [
           { label: "Usable Stock", value: formatQty(unrestricted, uom) },
           { label: "Avg Consumption", value: dailyRate > 1e-9 ? `${formatQty(dailyRate, uom)}/day` : "No recent data" },
-          { label: "Safety Stock", value: formatQty(safetyStock, uom) },
+          { label: "Minimum Stock", value: formatQty(minStock, uom) },
         ],
         severity: 1000,
       };
     }
     if (dailyRate > 1e-9) {
-      const daysUntilSafety = (unrestricted - safetyStock) / dailyRate;
-      if (daysUntilSafety <= APPROACHING_SAFETY_STOCK_DAYS) {
+      const daysUntilMin = (unrestricted - minStock) / dailyRate;
+      if (daysUntilMin <= APPROACHING_MIN_STOCK_DAYS) {
         return {
           materialId,
           materialName,
           type: "HIGH_RISK",
           typeLabel: "High Inventory Risk",
-          explanation: `Usable stock is ${formatQty(unrestricted, uom)} with average consumption of ${formatQty(dailyRate, uom)}/day. This gives approximately ${formatNumber(daysCover!, 1)} days of cover, with safety stock at ${formatQty(safetyStock, uom)}. Stock is likely to reach safety stock in about ${daysUntilSafety < 1 ? "less than a day" : `${formatNumber(daysUntilSafety, 0)} day${daysUntilSafety >= 1.5 ? "s" : ""}`}.${incomingNote}`,
+          explanation: `Usable stock is ${formatQty(unrestricted, uom)} with average consumption of ${formatQty(dailyRate, uom)}/day. This gives approximately ${formatNumber(daysCover!, 1)} days of cover, with minimum stock at ${formatQty(minStock, uom)}. Stock is likely to reach minimum stock in about ${daysUntilMin < 1 ? "less than a day" : `${formatNumber(daysUntilMin, 0)} day${daysUntilMin >= 1.5 ? "s" : ""}`}.${incomingNote}`,
           metrics: [
             { label: "Usable Stock", value: formatQty(unrestricted, uom) },
             { label: "Avg Consumption", value: `${formatQty(dailyRate, uom)}/day` },
-            { label: "Safety Stock", value: formatQty(safetyStock, uom) },
+            { label: "Minimum Stock", value: formatQty(minStock, uom) },
           ],
-          severity: 900 - daysUntilSafety * 10,
+          severity: 900 - daysUntilMin * 10,
         };
       }
     }
@@ -207,7 +207,7 @@ export async function getMaterialRiskInputs(materialId: string): Promise<Materia
     onHand,
     qcHold,
     blocked,
-    safetyStock: material.safetyStock ?? null,
+    minStock: material.minStock ?? null,
     dailyRate: total / TRAILING_WINDOW_DAYS,
     recentDailyRate: recentTotal / RECENT_WINDOW_DAYS,
     distinctConsumptionDays: distinctDays.size,
@@ -286,7 +286,7 @@ export async function getInventoryInsights(): Promise<{ insights: InventoryInsig
       onHand,
       qcHold: qcHoldByMaterial.get(m.id) ?? 0,
       blocked: blockedByMaterial.get(m.id) ?? 0,
-      safetyStock: m.safetyStock ?? null,
+      minStock: m.minStock ?? null,
       dailyRate,
       recentDailyRate: c ? c.recentTotal / RECENT_WINDOW_DAYS : 0,
       distinctConsumptionDays: c?.distinctDays.size ?? 0,

@@ -83,11 +83,12 @@ export default async function LedgerPage({
         action={
           <ExportCsvButton
             filename="ledger.csv"
-            headers={["Timestamp", "Type", "Material", "Quantity", "UOM", "From", "To", "Reference", "Batch/Lot", "Reason"]}
+            headers={["Timestamp", "Type", "Material", "Material Type", "Quantity", "UOM", "From", "To", "Reference", "Batch/Lot", "Reason"]}
             rows={transactions.map((t) => [
               formatDateTime(t.timestamp),
               t.transactionType,
               t.material.name,
+              t.material.category === "SPARE" ? "Spare" : "Material",
               formatNumber(t.quantity),
               t.uom,
               t.sourceLocation?.name ?? "",
@@ -109,6 +110,7 @@ export default async function LedgerPage({
                   <Th>Timestamp</Th>
                   <Th>Type</Th>
                   <Th>Material</Th>
+                  <Th>Material Type</Th>
                   <Th className="text-right">Quantity</Th>
                   <Th>From</Th>
                   <Th>To</Th>
@@ -119,10 +121,11 @@ export default async function LedgerPage({
               </thead>
               <tbody>
                 {transactions.map((t) => (
-                  <tr key={t.id} className="border-b border-border-soft last:border-0">
+                  <tr key={t.id} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                     <Td className="whitespace-nowrap text-xs text-muted">{formatDateTime(t.timestamp)}</Td>
                     <Td className="text-xs text-muted">{t.transactionType.replace("_", " ")}</Td>
                     <Td>{t.material.name}</Td>
+                    <Td className="text-xs text-muted">{t.material.category === "SPARE" ? "Spare" : "Material"}</Td>
                     <Td className="text-right tabular">{formatNumber(t.quantity)} {t.uom}</Td>
                     <Td className="text-xs text-muted">{t.sourceLocation?.name ?? "—"}</Td>
                     <Td className="text-xs text-muted">{t.destinationLocation?.name ?? "—"}</Td>

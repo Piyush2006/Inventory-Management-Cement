@@ -18,7 +18,7 @@ export async function DispatchReportSection({
   const users = await prisma.user.findMany({ where: { active: true }, orderBy: { name: "asc" } });
 
   const { from, to } = parseDateRangeParams(params.from, params.to);
-  const filters = { from, to, materialId: params.materialId, status: params.status, reference: params.reference, userId: params.userId };
+  const filters = { from, to, materialId: params.materialId, status: params.status, reference: params.reference, userId: params.userId, category: params.category };
   // Store Operator only ever sees its own assigned dispatches anywhere else in the app
   // (movements/page.tsx scopes the Dispatch fetch itself, not just which actions render) —
   // Reports mirrors that, not a wider default.
@@ -30,7 +30,7 @@ export async function DispatchReportSection({
     <div className="space-y-4">
       <ReportFilterBar
         tab="dispatch"
-        fields={["dateRange", "material", "status", "reference", "user"]}
+        fields={["dateRange", "material", "status", "reference", "user", "category"]}
         params={params}
         materials={materials.map((m) => ({ value: m.id, label: m.name }))}
         locations={[]}
@@ -43,8 +43,8 @@ export async function DispatchReportSection({
         action={
           <ExportCsvButton
             filename="dispatch-report.csv"
-            headers={["Dispatch ID", "Material", "Quantity", "Destination", "Status", "Created Date", "Dispatched Date"]}
-            rows={report.rows.map((d) => [d.dispatchReference, d.materialName, formatNumber(d.quantity), d.customerDestination, d.status, formatDate(d.createdAt), d.dispatchedAt ? formatDate(d.dispatchedAt) : ""])}
+            headers={["Dispatch ID", "Material", "Category", "Quantity", "Destination", "Status", "Created Date", "Dispatched Date"]}
+            rows={report.rows.map((d) => [d.dispatchReference, d.materialName, d.category.replace("_", " "), formatNumber(d.quantity), d.customerDestination, d.status, formatDate(d.createdAt), d.dispatchedAt ? formatDate(d.dispatchedAt) : ""])}
           />
         }
       >
@@ -57,6 +57,7 @@ export async function DispatchReportSection({
                 <tr className="border-b border-border-soft">
                   <Th>Dispatch ID</Th>
                   <Th>Material</Th>
+                  <Th>Category</Th>
                   <Th className="text-right">Quantity</Th>
                   <Th>Destination</Th>
                   <Th>Status</Th>
@@ -66,9 +67,10 @@ export async function DispatchReportSection({
               </thead>
               <tbody>
                 {report.rows.map((d) => (
-                  <tr key={d.id} className="border-b border-border-soft last:border-0">
+                  <tr key={d.id} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                     <Td className="text-xs text-muted-soft">{d.dispatchReference}</Td>
                     <Td>{d.materialName}</Td>
+                    <Td className="text-xs text-muted">{d.category.replace("_", " ")}</Td>
                     <Td className="text-right tabular">{formatNumber(d.quantity)} {d.uom}</Td>
                     <Td className="text-xs text-muted">{d.customerDestination}</Td>
                     <Td className="text-xs text-muted">{d.status}</Td>

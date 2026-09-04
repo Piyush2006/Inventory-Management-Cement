@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { Panel } from "@/components/ui";
+import { MATERIAL_CATEGORIES, REQUEST_TYPES } from "@/lib/domain/enums";
 
-export type FilterField = "dateRange" | "material" | "location" | "operation" | "status" | "reference" | "user" | "purpose";
+export type FilterField = "dateRange" | "material" | "location" | "operation" | "status" | "reference" | "user" | "purpose" | "category" | "requestType";
 
 type Option = { value: string; label: string };
 type StatusOption = Option & { group?: string };
@@ -97,6 +98,28 @@ export function ReportFilterBar({
               <option value="">All Purposes</option>
               <option value="TRANSFER">Transfer</option>
               <option value="ISSUE">Issue</option>
+            </select>
+          </label>
+        )}
+        {fields.includes("category") && (
+          <label className="text-xs text-muted">
+            Category
+            <select name="category" defaultValue={params.category ?? ""} className={inputClass}>
+              <option value="">All Categories</option>
+              {MATERIAL_CATEGORIES.map((c) => (
+                <option key={c} value={c}>{c.replace("_", " ")}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        {fields.includes("requestType") && (
+          <label className="text-xs text-muted">
+            Type
+            <select name="type" defaultValue={params.type ?? ""} className={inputClass}>
+              <option value="">All Types</option>
+              {REQUEST_TYPES.map((t) => (
+                <option key={t} value={t}>{t === "SPARE" ? "Spare" : "Material"}</option>
+              ))}
             </select>
           </label>
         )}

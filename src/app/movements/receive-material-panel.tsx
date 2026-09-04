@@ -15,6 +15,7 @@ type Receipt = {
   receiptDate: Date;
   supplierName: string;
   materialName: string;
+  category: string;
   receivedQuantity: number;
   acceptedQuantity: number;
   rejectedQuantity: number;
@@ -57,6 +58,7 @@ export function ReceiveMaterialPanel({
                 <Th>Date</Th>
                 <Th>Supplier</Th>
                 <Th>Material</Th>
+                <Th>Type</Th>
                 <Th className="text-right">Received</Th>
                 <Th className="text-right">Accepted</Th>
                 <Th className="text-right">Rejected</Th>
@@ -65,11 +67,12 @@ export function ReceiveMaterialPanel({
             </thead>
             <tbody>
               {receipts.map((r) => (
-                <tr key={r.id} className="border-b border-border-soft last:border-0">
+                <tr key={r.id} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                   <Td><Link href={`/receipts/${r.id}`} className="text-accent hover:underline">{r.grnNumber}</Link></Td>
                   <Td className="whitespace-nowrap text-xs text-muted">{formatDate(r.receiptDate)}</Td>
                   <Td className="text-xs text-muted">{r.supplierName}</Td>
                   <Td>{r.materialName}</Td>
+                  <Td className="text-xs text-muted">{r.category === "SPARE" ? "Spare" : "Material"}</Td>
                   <Td className="text-right tabular">{formatNumber(r.receivedQuantity)}</Td>
                   <Td className="text-right tabular text-[var(--status-healthy)]">{formatNumber(r.acceptedQuantity)}</Td>
                   <Td className="text-right tabular text-[var(--status-critical)]">{formatNumber(r.rejectedQuantity)}</Td>

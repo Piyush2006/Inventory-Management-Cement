@@ -193,7 +193,7 @@ export function RequestStatusPanel({ rows }: { rows: { status: string; label: st
   );
 }
 
-export function StockWatchlistPanel({ rows }: { rows: { material: { id: string; name: string; uom: string }; currentStock: number; status: "HEALTHY" | "LOW" | "CRITICAL"; daysCover: number }[] }) {
+export function StockWatchlistPanel({ rows }: { rows: { material: { id: string; name: string; uom: string; category: string }; currentStock: number; status: "HEALTHY" | "LOW" | "CRITICAL"; daysCover: number }[] }) {
   return (
     <Panel title="Stock Requiring Attention" action={<Link href="/inventory" className="text-xs text-accent hover:underline">View all →</Link>}>
       {rows.length === 0 ? (
@@ -204,6 +204,7 @@ export function StockWatchlistPanel({ rows }: { rows: { material: { id: string; 
             <thead>
               <tr className="border-b border-border-soft">
                 <Th>Material</Th>
+                <Th>Type</Th>
                 <Th className="text-right">Stock</Th>
                 <Th>Status</Th>
                 <Th className="text-right">Days Cover</Th>
@@ -211,10 +212,11 @@ export function StockWatchlistPanel({ rows }: { rows: { material: { id: string; 
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.material.id} className="border-b border-border-soft last:border-0">
+                <tr key={r.material.id} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                   <Td>
                     <Link href={`/inventory/${r.material.id}`} className="hover:text-accent">{r.material.name}</Link>
                   </Td>
+                  <Td className="text-xs text-muted">{r.material.category === "SPARE" ? "Spare" : "Material"}</Td>
                   <Td className="text-right tabular">{formatNumber(r.currentStock)} {r.material.uom}</Td>
                   <Td><StatusBadge status={r.status} /></Td>
                   <Td className="text-right tabular">{r.daysCover.toFixed(0)} days</Td>

@@ -1,11 +1,11 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { prisma } from "@/lib/db";
-import { getTotalOnHand, getLocationBalances, getTotalReserved, getTotalInTransit } from "@/lib/inventory/balance";
-import { getTotalUnrestrictedAvailable, getTotalQualityBalances } from "@/lib/inventory/quality";
+import { getTotalOnHand, getLocationBalances } from "@/lib/inventory/balance";
+import { getTotalUnrestrictedAvailable } from "@/lib/inventory/quality";
 import { classifyStockStatus } from "@/lib/inventory/status";
 import { computeDaysOfCover } from "@/lib/inventory/daysOfCover";
-import { Panel, KpiTile, Th, Td, EmptyState, LinkPill } from "@/components/ui";
+import { Panel, KpiTile, Th, Td, EmptyState, LinkPill, OverstockBadge, InfoTooltip } from "@/components/ui";
 import { StatusBadge, RequestStatusBadge } from "@/components/status-badge";
 import { QualityPanel } from "./quality-panel";
 import { formatNumber, formatDateTime, formatDate } from "@/lib/format";
@@ -25,12 +25,9 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
   const material = await prisma.material.findUnique({ where: { id: materialId } });
   if (!material) notFound();
 
-  const [currentStock, reserved, inTransit, unrestrictedStock, qualityTotals, locations, qualityRows, doc, consumptionHistory, movements, openRequests] = await Promise.all([
+  const [currentStock, unrestrictedStock, locations, qualityRows, doc, consumptionHistory, movements, openRequests] = await Promise.all([
     getTotalOnHand(materialId),
-    getTotalReserved(materialId),
-    getTotalInTransit(materialId),
     getTotalUnrestrictedAvailable(materialId),
-    getTotalQualityBalances(materialId),
     getLocationBalances(materialId),
     prisma.qualityBalance.findMany({ where: { materialId } }),
     computeDaysOfCover(materialId),
@@ -49,7 +46,7 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
     prisma.stockRequest.findMany({ where: { materialId, status: { in: ["NEW_REQUEST", "ACCEPTED", "ASSIGNED", "IN_TRANSIT", "DELIVERED", "NOT_RECEIVED", "PARTIALLY_RECEIVED"] } }, orderBy: { requiredByDate: "asc" } }),
   ]);
 
-  const { status, reason } = classifyStockStatus({ currentStock: unrestrictedStock, minStock: material.minStock, safetyStock: material.safetyStock });
+  const { status, reason, overstock } = classifyStockStatus({ currentStock: unrestrictedStock, minStock: material.minStock, maxStock: material.maxStock });
 
   const qualityByLocation = new Map<string, { qcHold: number; blocked: number }>();
   for (const q of qualityRows) {
@@ -78,56 +75,54 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
         </div>
       </div>
 
+      {/* Primary summary — the single place headline stock numbers appear. Nothing below this
+          repeats Current Stock / Min Stock / Max Stock / Days of Cover. */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <KpiTile label="Current Stock" value={`${formatNumber(currentStock)} ${material.uom}`} />
         <KpiTile label="Min Stock" value={material.minStock != null ? formatNumber(material.minStock) : "—"} />
-        <KpiTile label="Safety Stock" value={material.safetyStock != null ? formatNumber(material.safetyStock) : "—"} />
-        <KpiTile label="Days of Cover" value={doc.na ? "N/A" : `${doc.daysCover?.toFixed(1)}d`} sublabel={doc.na ? "No consumption in 30 days" : `${formatNumber(doc.dailyConsumption)} ${material.uom}/day avg`} />
+        <KpiTile label="Max Stock" value={material.maxStock != null ? formatNumber(material.maxStock) : "—"} />
+        <KpiTile
+          label="Days of Cover"
+          value={doc.na ? "N/A" : `${doc.daysCover?.toFixed(1)}d`}
+          sublabel={doc.na ? "Insufficient consumption data" : `Based on ${formatNumber(doc.dailyConsumption)} ${material.uom}/day`}
+          info={
+            <InfoTooltip label="Days of Cover definition">
+              <span className="mb-1 block font-medium text-foreground">Days of Cover</span>
+              Estimated number of days the current usable stock will last based on the average daily consumption.
+              <br />
+              <br />
+              <span className="font-medium text-foreground">Formula:</span> Unrestricted Stock ÷ Average Daily Consumption
+            </InfoTooltip>
+          }
+        />
       </div>
 
       <div className="flex items-center gap-3 rounded-lg border border-border bg-surface px-4 py-3">
         <span className="text-xs font-medium uppercase tracking-wide text-muted">Status</span>
         <StatusBadge status={status} />
+        {overstock && <OverstockBadge />}
         <span className="text-xs text-muted">{reason}</span>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <KpiTile label="On Hand" value={`${formatNumber(currentStock)} ${material.uom}`} sublabel="Physically at a real location" />
-        <KpiTile label="Reserved" value={`${formatNumber(reserved)} ${material.uom}`} sublabel="Assigned, not yet moved" />
-        <KpiTile label="Available" value={`${formatNumber(currentStock - reserved)} ${material.uom}`} sublabel="On Hand − Reserved" />
-        <KpiTile label="In Transit" value={`${formatNumber(inTransit)} ${material.uom}`} sublabel="Out for delivery, unconfirmed" tone={inTransit > 0 ? "warning" : "default"} />
-      </div>
+      {/* Explains the Days of Cover figure above — shown once, not repeated per KPI card. */}
+      <Panel title="Average Daily Consumption">
+        <div className="flex items-baseline gap-2">
+          <span className="text-2xl font-semibold tabular text-foreground">{doc.na ? "N/A" : `${formatNumber(doc.dailyConsumption)} ${material.uom}/day`}</span>
+          <InfoTooltip label="Average Daily Consumption definition">
+            <span className="mb-1 block font-medium text-foreground">Average Daily Consumption</span>
+            Average quantity consumed per day based on the last 30 days of consumption history.
+          </InfoTooltip>
+        </div>
+        <div className="mt-1 text-xs text-muted-soft">{doc.na ? "Insufficient consumption data" : "Based on the last 30 days of consumption history"}</div>
+      </Panel>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <KpiTile label="On Hand" value={`${formatNumber(currentStock)} ${material.uom}`} sublabel="Physically at a real location" />
-        <KpiTile label="Unrestricted" value={`${formatNumber(unrestrictedStock)} ${material.uom}`} sublabel="Usable — excludes QC Hold/Blocked" tone={unrestrictedStock < currentStock - 1e-6 ? "warning" : "default"} />
-        <KpiTile label="QC Hold" value={`${formatNumber(qualityTotals.qcHold)} ${material.uom}`} sublabel="Pending quality release" tone={qualityTotals.qcHold > 0 ? "warning" : "default"} />
-        <KpiTile label="Blocked" value={`${formatNumber(qualityTotals.blocked)} ${material.uom}`} sublabel="Not usable" tone={qualityTotals.blocked > 0 ? "critical" : "default"} />
-      </div>
-
+      {/* Where the stock is, and how much of it is restricted — the one place per-location
+          figures appear, so a location is never listed twice on this page. */}
       {locationQuality.length > 0 && (
-        <Panel title="Quality Status by Location" action={!canManageQuality ? <span className="text-xs text-muted-soft">View only</span> : undefined}>
+        <Panel title="Location / Quality" action={!canManageQuality ? <span className="text-xs text-muted-soft">View only</span> : undefined}>
           <QualityPanel materialId={material.id} uom={material.uom} locations={locationQuality} canManage={canManageQuality} />
         </Panel>
       )}
-
-      <Panel title="Locations Holding This Material">
-        {locations.length === 0 ? (
-          <EmptyState title="Not currently stocked anywhere" />
-        ) : (
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {locations.map((b) => (
-              <div key={b.id} className="rounded-md border border-border-soft bg-surface-raised p-3">
-                <div className="text-sm text-foreground">{b.location.name}</div>
-                <div className="mt-1 text-xs text-muted-soft">
-                  {formatNumber(b.quantity)} {material.uom}
-                  {b.location.capacity ? ` — ${((b.quantity / b.location.capacity) * 100).toFixed(0)}% full` : ""}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Panel>
 
       <Panel title="Open Stock Requests" action={<LinkPill href={`/requests?materialId=${material.id}`}>New request →</LinkPill>}>
         {openRequests.length === 0 ? (
@@ -149,7 +144,7 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
 
       <Panel
         title="Consumption History (30 Days)"
-        action={<span className="text-xs text-muted-soft">{formatNumber(doc.total30Day)} {material.uom} total &middot; {formatNumber(doc.dailyConsumption)} {material.uom}/day avg</span>}
+        action={<span className="text-xs text-muted-soft">{formatNumber(doc.total30Day)} {material.uom} total</span>}
       >
         {consumptionHistory.length === 0 ? (
           <EmptyState title="No consumption recorded in the last 30 days" />
@@ -166,7 +161,7 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
               </thead>
               <tbody>
                 {consumptionHistory.map((m) => (
-                  <tr key={m.id} className="border-b border-border-soft last:border-0">
+                  <tr key={m.id} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                     <Td className="whitespace-nowrap text-xs text-muted">{formatDateTime(m.timestamp)}</Td>
                     <Td className="text-right tabular">-{formatNumber(m.quantity)} {m.uom}</Td>
                     <Td className="text-xs text-muted">{m.sourceLocation?.name ?? "—"}</Td>
@@ -193,7 +188,7 @@ export default async function MaterialDetailPage({ params }: { params: Promise<{
             </thead>
             <tbody>
               {movements.map((m) => (
-                <tr key={m.id} className="border-b border-border-soft last:border-0">
+                <tr key={m.id} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                   <Td className="whitespace-nowrap text-xs text-muted">{formatDateTime(m.timestamp)}</Td>
                   <Td className="text-xs text-muted">{m.transactionType.replace("_", " ")}</Td>
                   <Td className="text-right tabular">{formatNumber(m.quantity)} {m.uom}</Td>

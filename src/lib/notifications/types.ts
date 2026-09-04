@@ -11,6 +11,7 @@ export interface NotificationContext {
   link?: string; // concrete existing route, e.g. `/requests/${id}`
   currentStock?: number;
   minimumStock?: number;
+  requestType?: string; // StockRequest.requestType (Material/Spare), for REQUEST_* events
   // FK ids for RELEVANT_USER recipient resolution — whichever apply to this event.
   requestedByUserId?: string;
   assignedToUserId?: string;

@@ -60,7 +60,6 @@ export default async function NotificationsPage({ searchParams }: { searchParams
     <div className="space-y-4">
       <div>
         <h1 className="text-lg font-semibold text-foreground">Notification &amp; Alert Management</h1>
-        <p className="mt-1 text-sm text-muted">What happened, who needs to know, and who needs to act.</p>
       </div>
 
       <div className="flex flex-wrap gap-2 border-b border-border-soft pb-3">

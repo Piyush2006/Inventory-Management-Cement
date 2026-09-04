@@ -1,23 +1,34 @@
 "use client";
 
-import { Fragment, useState, useTransition } from "react";
-import { actionSaveMaterial, actionDeactivateMaterial } from "@/app/actions";
+import { Fragment, useMemo, useState, useTransition } from "react";
+import { actionSaveMaterial, actionDeleteMaterial } from "@/app/actions";
 import { MATERIAL_CATEGORIES, SPARE_CRITICALITIES } from "@/lib/domain/enums";
 import { formatNumber } from "@/lib/format";
+import { EditIcon, DeleteIcon } from "@/components/ui";
 
 type Material = {
   id: string; materialCode: string; name: string; category: string; uom: string;
-  minStock: number | null; safetyStock: number | null; defaultLocationId: string | null;
-  active: boolean;
+  minStock: number | null; maxStock: number | null; defaultLocationId: string | null;
   partNumber?: string | null; manufacturer?: string | null; equipmentRef?: string | null; criticality?: string | null;
 };
 type Location = { id: string; name: string };
 
+const NON_SPARE_CATEGORIES = MATERIAL_CATEGORIES.filter((c) => c !== "SPARE");
+
 function MaterialFields({ material, locations }: { material?: Material; locations: Location[] }) {
-  // Controlled (not just defaultValue) so the Spare-only fields below can toggle live when the
-  // category changes, both when adding a new material and when editing an existing one.
-  const [category, setCategory] = useState(material?.category ?? MATERIAL_CATEGORIES[0]);
-  const isSpare = category === "SPARE";
+  // Type (Material/Spare) is a UI-only toggle — not itself submitted — that narrows which
+  // Category options are offered, mirroring the New Request form's Type field. Controlled (not
+  // just defaultValue) so the Spare-only fields below can toggle live when Type changes, both
+  // when adding a new material and when editing an existing one.
+  const [type, setType] = useState<"MATERIAL" | "SPARE">(material?.category === "SPARE" ? "SPARE" : "MATERIAL");
+  const [category, setCategory] = useState(material?.category && material.category !== "SPARE" ? material.category : NON_SPARE_CATEGORIES[0]);
+  const isSpare = type === "SPARE";
+
+  function handleTypeChange(nextType: "MATERIAL" | "SPARE") {
+    setType(nextType);
+    if (nextType === "MATERIAL") setCategory(NON_SPARE_CATEGORIES[0]);
+  }
+
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
       <label className="text-xs text-muted">
@@ -29,13 +40,28 @@ function MaterialFields({ material, locations }: { material?: Material; location
         <input name="name" defaultValue={material?.name} required className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
       </label>
       <label className="text-xs text-muted">
-        Category
-        <select name="category" value={category} onChange={(e) => setCategory(e.target.value)} required className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
-          {MATERIAL_CATEGORIES.map((c) => (
-            <option key={c} value={c}>{c.replace("_", " ")}</option>
-          ))}
+        Type
+        <select value={type} onChange={(e) => handleTypeChange(e.target.value as "MATERIAL" | "SPARE")} className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
+          <option value="MATERIAL">Material</option>
+          <option value="SPARE">Spare</option>
         </select>
       </label>
+      {isSpare ? (
+        <label className="text-xs text-muted">
+          Category
+          <input value="SPARE" disabled className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-muted-soft outline-none" />
+          <input type="hidden" name="category" value="SPARE" />
+        </label>
+      ) : (
+        <label className="text-xs text-muted">
+          Category
+          <select name="category" value={category} onChange={(e) => setCategory(e.target.value)} required className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
+            {NON_SPARE_CATEGORIES.map((c) => (
+              <option key={c} value={c}>{c.replace("_", " ")}</option>
+            ))}
+          </select>
+        </label>
+      )}
       <label className="text-xs text-muted">
         UOM
         <select name="uom" defaultValue={material?.uom ?? "MT"} required className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
@@ -57,12 +83,8 @@ function MaterialFields({ material, locations }: { material?: Material; location
         <input name="minStock" type="number" step="any" defaultValue={material?.minStock ?? ""} className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
       </label>
       <label className="text-xs text-muted">
-        Safety stock
-        <input name="safetyStock" type="number" step="any" defaultValue={material?.safetyStock ?? ""} className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
-      </label>
-      <label className="flex items-center gap-2 self-end text-xs text-muted">
-        <input name="active" type="checkbox" defaultChecked={material?.active ?? true} className="h-4 w-4 rounded border-border" />
-        Active
+        Max stock
+        <input name="maxStock" type="number" step="any" defaultValue={material?.maxStock ?? ""} className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
       </label>
       {isSpare && (
         <>
@@ -97,6 +119,8 @@ export function MaterialsManager({ materials, locations, canEdit }: { materials:
   const [editingId, setEditingId] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [category, setCategoryFilter] = useState("");
+  const visibleMaterials = useMemo(() => (category ? materials.filter((m) => m.category === category) : materials), [materials, category]);
 
   function submit(fd: FormData, onDone: () => void) {
     setError(null);
@@ -109,8 +133,20 @@ export function MaterialsManager({ materials, locations, canEdit }: { materials:
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="text-xs text-muted">{materials.length} materials</div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="text-xs text-muted">{visibleMaterials.length} materials</div>
+          <select
+            value={category}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            className="rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-accent"
+          >
+            <option value="">All categories</option>
+            {MATERIAL_CATEGORIES.map((c) => (
+              <option key={c} value={c}>{c.replace("_", " ")}</option>
+            ))}
+          </select>
+        </div>
         {canEdit && (
           <button onClick={() => setAdding((v) => !v)} className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground">
             {adding ? "Cancel" : "+ Add Material"}
@@ -140,41 +176,47 @@ export function MaterialsManager({ materials, locations, canEdit }: { materials:
               <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted">Category</th>
               <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted">UOM</th>
               <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-muted">Min</th>
-              <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-muted">Safety</th>
-              <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted">Active</th>
-              <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted"></th>
+              <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-muted">Max</th>
+              <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {materials.map((m) => (
+            {visibleMaterials.map((m) => (
               <Fragment key={m.id}>
-                <tr className="border-b border-border-soft last:border-0">
+                <tr className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                   <td className="px-3 py-2.5 text-sm text-muted-soft">{m.materialCode}</td>
                   <td className="px-3 py-2.5 text-sm text-foreground">{m.name}</td>
                   <td className="px-3 py-2.5 text-xs text-muted">{m.category.replace("_", " ")}</td>
                   <td className="px-3 py-2.5 text-xs text-muted">{m.uom}</td>
                   <td className="px-3 py-2.5 text-right text-sm tabular text-muted">{m.minStock != null ? formatNumber(m.minStock) : "—"}</td>
-                  <td className="px-3 py-2.5 text-right text-sm tabular text-muted">{m.safetyStock != null ? formatNumber(m.safetyStock) : "—"}</td>
-                  <td className="px-3 py-2.5 text-xs">{m.active ? <span className="text-[var(--status-healthy)]">Active</span> : <span className="text-muted-soft">Inactive</span>}</td>
+                  <td className="px-3 py-2.5 text-right text-sm tabular text-muted">{m.maxStock != null ? formatNumber(m.maxStock) : "—"}</td>
                   <td className="px-3 py-2.5">
                     {canEdit ? (
-                      <div className="flex gap-2">
-                        <button onClick={() => setEditingId(editingId === m.id ? null : m.id)} className="text-xs text-accent hover:underline">
-                          {editingId === m.id ? "Close" : "Edit"}
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => setEditingId(editingId === m.id ? null : m.id)}
+                          title={editingId === m.id ? "Close" : "Edit"}
+                          aria-label={editingId === m.id ? "Close edit form" : "Edit material"}
+                          className="rounded p-1.5 text-muted hover:bg-surface-raised hover:text-accent"
+                        >
+                          <EditIcon />
                         </button>
                         <button
                           onClick={() => {
                             const fd = new FormData();
                             fd.set("id", m.id);
-                            fd.set("active", (!m.active).toString());
+                            setError(null);
                             startTransition(async () => {
-                              await actionDeactivateMaterial(fd);
+                              const res = await actionDeleteMaterial(fd);
+                              if (!res.ok) setError(res.error ?? "Failed to delete material");
                             });
                           }}
                           disabled={pending}
-                          className="text-xs text-muted hover:text-foreground disabled:opacity-40"
+                          title="Delete"
+                          aria-label="Delete material"
+                          className="rounded p-1.5 text-muted hover:bg-[var(--status-critical-bg)] hover:text-[var(--status-critical)] disabled:opacity-40"
                         >
-                          {m.active ? "Deactivate" : "Reactivate"}
+                          <DeleteIcon />
                         </button>
                       </div>
                     ) : (
@@ -184,7 +226,7 @@ export function MaterialsManager({ materials, locations, canEdit }: { materials:
                 </tr>
                 {canEdit && editingId === m.id && (
                   <tr className="border-b border-border-soft">
-                    <td colSpan={8} className="bg-surface-raised px-3 py-3">
+                    <td colSpan={7} className="bg-surface-raised px-3 py-3">
                       <form className="space-y-3" action={(fd) => submit(fd, () => setEditingId(null))}>
                         <input type="hidden" name="id" value={m.id} />
                         <MaterialFields material={m} locations={locations} />
@@ -201,6 +243,7 @@ export function MaterialsManager({ materials, locations, canEdit }: { materials:
           </tbody>
         </table>
       </div>
+      {error && !adding && editingId === null && <div className="text-sm text-[var(--status-critical)]">{error}</div>}
     </div>
   );
 }

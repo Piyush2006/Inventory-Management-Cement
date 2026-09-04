@@ -16,6 +16,7 @@ export function RequestListRow({
   requestNumber,
   materialName,
   purpose,
+  requestType,
   uom,
   quantityRequested,
   requestedByName,
@@ -37,6 +38,7 @@ export function RequestListRow({
   requestNumber: string;
   materialName: string;
   purpose?: string;
+  requestType?: string;
   uom: string;
   quantityRequested: number;
   requestedByName: string;
@@ -68,10 +70,11 @@ export function RequestListRow({
 
   return (
     <>
-      <tr className="border-b border-border-soft last:border-0">
+      <tr className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
         <Td className="text-xs text-muted-soft">{requestNumber}</Td>
         <Td>{materialName}</Td>
         <Td className="text-xs text-muted">{purpose === "ISSUE" ? "Issue" : "Transfer"}</Td>
+        <Td className="text-xs text-muted">{requestType === "SPARE" ? "Spare" : "Material"}</Td>
         <Td className="text-right tabular">{formatNumber(quantityRequested)} {uom}</Td>
         <Td className="text-xs text-muted">{requestedByName}</Td>
         <Td className="text-xs text-muted">{assignedToName ?? (routedToName ? `→ ${routedToName}` : "—")}</Td>
@@ -92,7 +95,7 @@ export function RequestListRow({
       </tr>
       {expanded && (
         <tr className="border-b border-border-soft bg-surface-raised">
-          <td colSpan={9} className="px-3 py-3">
+          <td colSpan={10} className="px-3 py-3">
             <RequestActionPanel
               requestId={id}
               status={status}

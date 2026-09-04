@@ -25,7 +25,6 @@ export default async function DashboardPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-lg font-semibold text-foreground">Dashboard</h1>
-        <p className="mt-1 text-sm text-muted">Overview of inventory, requests and exceptions.</p>
       </div>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_380px] xl:items-start">
@@ -100,7 +99,7 @@ export default async function DashboardPage() {
             </thead>
             <tbody>
               {data.materialRows.map((r) => (
-                <tr key={r.material.id} className="border-b border-border-soft last:border-0">
+                <tr key={r.material.id} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                   <Td>{r.material.name}</Td>
                   <Td className="text-xs text-muted">{r.material.category.replace("_", " ")}</Td>
                   <Td className="text-right tabular">
@@ -127,6 +126,7 @@ export default async function DashboardPage() {
                 <Th>Timestamp</Th>
                 <Th>Material</Th>
                 <Th>Type</Th>
+                <Th>Material Type</Th>
                 <Th className="text-right">Quantity</Th>
                 <Th>From</Th>
                 <Th>To</Th>
@@ -134,10 +134,11 @@ export default async function DashboardPage() {
             </thead>
             <tbody>
               {data.recentMovements.map((m) => (
-                <tr key={m.id} className="border-b border-border-soft last:border-0">
+                <tr key={m.id} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                   <Td className="whitespace-nowrap text-xs text-muted">{formatDateTime(m.timestamp)}</Td>
                   <Td>{m.material.name}</Td>
                   <Td className="text-xs text-muted">{m.transactionType.replace("_", " ")}</Td>
+                  <Td className="text-xs text-muted">{m.material.category === "SPARE" ? "Spare" : "Material"}</Td>
                   <Td className="text-right tabular">
                     {formatNumber(m.quantity)} {m.uom}
                   </Td>

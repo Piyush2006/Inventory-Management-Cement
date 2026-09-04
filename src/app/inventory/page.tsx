@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { classifyStockStatus } from "@/lib/inventory/status";
-import { Panel, Th, Td, LinkPill, EmptyState } from "@/components/ui";
+import { Panel, Th, Td, LinkPill, EmptyState, OverstockBadge } from "@/components/ui";
 import { StatusBadge } from "@/components/status-badge";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { formatNumber } from "@/lib/format";
@@ -51,7 +51,7 @@ export default async function InventoryPage({
     const currentStock = relevantBalances.reduce((s, b) => s + b.quantity, 0);
     const nonUnrestricted = relevantBalances.reduce((s, b) => s + (nonUnrestrictedByMaterialLocation.get(`${m.id}:${b.locationId}`) ?? 0), 0);
     const unrestrictedStock = Math.max(0, currentStock - nonUnrestricted);
-    const { status } = classifyStockStatus({ currentStock: unrestrictedStock, minStock: m.minStock, safetyStock: m.safetyStock });
+    const { status, overstock } = classifyStockStatus({ currentStock: unrestrictedStock, minStock: m.minStock, maxStock: m.maxStock });
     // Partitioned by location — every location actually holding this material, with its own
     // quantity, not just a flat total. Makes an increase at one specific location (e.g. after
     // a request is received) directly visible here instead of only on the Material Detail page.
@@ -59,7 +59,7 @@ export default async function InventoryPage({
       .filter((b) => Math.abs(b.quantity) > 1e-6)
       .map((b) => ({ name: b.location.name, quantity: b.quantity }))
       .sort((a, b) => b.quantity - a.quantity);
-    return { material: m, currentStock, status, locationBreakdown };
+    return { material: m, currentStock, status, overstock, locationBreakdown };
   });
   if (params.locationId) rows = rows.filter((r) => r.currentStock > 1e-6);
   if (params.status) rows = rows.filter((r) => r.status === params.status);
@@ -69,7 +69,6 @@ export default async function InventoryPage({
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-lg font-semibold text-foreground">Inventory</h1>
-          <p className="mt-1 text-sm text-muted">What do we have, and where? Every figure is derived from the movement ledger.</p>
         </div>
         {canReceiveMaterial && (
           <Link href="/receipts/new" className="shrink-0 rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground">
@@ -119,7 +118,7 @@ export default async function InventoryPage({
         action={
           <ExportCsvButton
             filename="inventory.csv"
-            headers={["Material", "Code", "Category", "Stock", "UOM", "Min Stock", "Safety Stock", "Status", "Locations"]}
+            headers={["Material", "Code", "Category", "Stock", "UOM", "Min Stock", "Max Stock", "Status", "Overstock", "Locations"]}
             rows={rows.map((r) => [
               r.material.name,
               r.material.materialCode,
@@ -127,8 +126,9 @@ export default async function InventoryPage({
               formatNumber(r.currentStock),
               r.material.uom,
               r.material.minStock != null ? formatNumber(r.material.minStock) : "",
-              r.material.safetyStock != null ? formatNumber(r.material.safetyStock) : "",
+              r.material.maxStock != null ? formatNumber(r.material.maxStock) : "",
               r.status,
+              r.overstock ? "Yes" : "No",
               r.locationBreakdown.map((b) => `${b.name}: ${formatNumber(b.quantity)}`).join("; "),
             ])}
           />
@@ -146,14 +146,14 @@ export default async function InventoryPage({
                   <Th>Location(s)</Th>
                   <Th className="text-right">Stock</Th>
                   <Th className="text-right">Min Stock</Th>
-                  <Th className="text-right">Safety Stock</Th>
+                  <Th className="text-right">Max Stock</Th>
                   <Th>Status</Th>
                   <Th></Th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.material.id} className="border-b border-border-soft last:border-0">
+                  <tr key={r.material.id} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                     <Td>
                       <div className="font-medium">{r.material.name}</div>
                       <div className="text-xs text-muted-soft">{r.material.materialCode}</div>
@@ -175,8 +175,13 @@ export default async function InventoryPage({
                     </Td>
                     <Td className="text-right tabular">{formatNumber(r.currentStock)} {r.material.uom}</Td>
                     <Td className="text-right tabular text-muted">{r.material.minStock != null ? formatNumber(r.material.minStock) : "—"}</Td>
-                    <Td className="text-right tabular text-muted">{r.material.safetyStock != null ? formatNumber(r.material.safetyStock) : "—"}</Td>
-                    <Td><StatusBadge status={r.status} /></Td>
+                    <Td className="text-right tabular text-muted">{r.material.maxStock != null ? formatNumber(r.material.maxStock) : "—"}</Td>
+                    <Td>
+                      <div className="flex items-center gap-1.5">
+                        <StatusBadge status={r.status} />
+                        {r.overstock && <OverstockBadge />}
+                      </div>
+                    </Td>
                     <Td><LinkPill href={`/inventory/${r.material.id}`}>View →</LinkPill></Td>
                   </tr>
                 ))}

@@ -3,7 +3,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { Panel, Th, EmptyState } from "@/components/ui";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { formatDate } from "@/lib/format";
-import { IN_TRANSIT_LOCATION_TYPE, ACCEPT_REJECT_ROLES, ROUTE_ROLES, ASSIGN_ROLES, OPEN_REQUEST_STATUSES, type UserRole } from "@/lib/domain/enums";
+import { IN_TRANSIT_LOCATION_TYPE, ACCEPT_REJECT_ROLES, ROUTE_ROLES, ASSIGN_ROLES, OPEN_REQUEST_STATUSES, REQUEST_TYPES, type UserRole } from "@/lib/domain/enums";
 import { NewRequestForm } from "./new-request-form";
 import { RequestTabs } from "./request-tabs";
 import { RequestListRow } from "./request-list-row";
@@ -41,8 +41,8 @@ function RequestTable({
       <div className="flex justify-end">
         <ExportCsvButton
           filename={exportFilename}
-          headers={["Request ID", "Material", "Purpose", "Qty Requested", "Requested By", "Routed To", "Assigned To", "Required By", "Status"]}
-          rows={rows.map((r) => [r.requestNumber, r.material.name, r.purpose === "ISSUE" ? "Issue" : "Transfer", r.quantityRequested, r.requestedBy.name, r.routedTo?.name ?? "", r.assignedTo?.name ?? "", formatDate(r.requiredByDate), r.status])}
+          headers={["Request ID", "Material", "Purpose", "Type", "Qty Requested", "Requested By", "Routed To", "Assigned To", "Required By", "Status"]}
+          rows={rows.map((r) => [r.requestNumber, r.material.name, r.purpose === "ISSUE" ? "Issue" : "Transfer", r.requestType === "SPARE" ? "Spare" : "Material", r.quantityRequested, r.requestedBy.name, r.routedTo?.name ?? "", r.assignedTo?.name ?? "", formatDate(r.requiredByDate), r.status])}
         />
       </div>
       <div className="overflow-x-auto scrollbar-thin">
@@ -52,6 +52,7 @@ function RequestTable({
             <Th>Request ID</Th>
             <Th>Material</Th>
             <Th>Purpose</Th>
+            <Th>Type</Th>
             <Th className="text-right">Qty</Th>
             <Th>Requested By</Th>
             <Th>Assigned To</Th>
@@ -68,6 +69,7 @@ function RequestTable({
               requestNumber={r.requestNumber}
               materialName={r.material.name}
               purpose={r.purpose}
+              requestType={r.requestType}
               uom={r.material.uom}
               quantityRequested={r.quantityRequested}
               requestedByName={r.requestedBy.name}
@@ -93,7 +95,12 @@ function RequestTable({
   );
 }
 
-export default async function RequestsPage() {
+export default async function RequestsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ type?: string }>;
+}) {
+  const params = await searchParams;
   const [materials, spareMaterials, locations, supervisors, operators, currentUser] = await Promise.all([
     prisma.material.findMany({ where: { active: true, category: { not: "SPARE" } }, orderBy: { name: "asc" } }),
     prisma.material.findMany({ where: { active: true, category: "SPARE" }, orderBy: { name: "asc" } }),
@@ -110,47 +117,29 @@ export default async function RequestsPage() {
   // Per the RBAC matrix: Requester sees only their own requests, Store Operator only the
   // ones assigned to them — everyone else (Store Supervisor "Manage", Inventory Manager
   // "All", Admin "Full") sees every request, since they're responsible for the whole queue.
-  let actionTitle = "Needs Your Action";
-  let actionWhere: Prisma.StockRequestWhereInput;
+  // The "needs your action" queue was dropped as a separate tab (every one of its rows is
+  // already a subset of Open Requests' broader status set, so nothing is lost — it's still
+  // visible there, just not called out in its own tab).
   let openWhere: Prisma.StockRequestWhereInput;
   let historyWhere: Prisma.StockRequestWhereInput;
   if (currentUser.role === "REQUESTER") {
-    actionTitle = "Awaiting Your Confirmation";
-    actionWhere = { requestedByUserId: currentUser.id, status: "DELIVERED" };
     openWhere = { requestedByUserId: currentUser.id, status: { in: OPEN_STATUSES } };
     historyWhere = { requestedByUserId: currentUser.id, status: { in: CLOSED_STATUSES } };
   } else if (currentUser.role === "STORE_OPERATOR") {
-    actionTitle = "My Assigned Requests";
-    actionWhere = { assignedToUserId: currentUser.id, status: { in: ["ASSIGNED", "IN_TRANSIT"] } };
     openWhere = { assignedToUserId: currentUser.id, status: { in: OPEN_STATUSES } };
     historyWhere = { assignedToUserId: currentUser.id, status: { in: CLOSED_STATUSES } };
-  } else if (currentUser.role === "ADMIN") {
-    // Full access — every status is actionable to Admin (it can even deliver/confirm on
-    // anyone's behalf), so its queue is the broadest of the three "sees everything" roles.
-    actionTitle = "All Actionable Requests";
-    actionWhere = { status: { in: ["NEW_REQUEST", "ACCEPTED", "ASSIGNED", "IN_TRANSIT", "DELIVERED", "PARTIALLY_RECEIVED", "NOT_RECEIVED"] } };
-    openWhere = { status: { in: OPEN_STATUSES } };
-    historyWhere = { status: { in: CLOSED_STATUSES } };
-  } else if (currentUser.role === "INVENTORY_MANAGER") {
-    // Accepts/rejects new requests AND routes accepted ones to a Store Supervisor — sees
-    // both stages. It no longer assigns an operator directly; that's the routed-to
-    // Supervisor's job now.
-    actionTitle = "Requests Requiring Action";
-    actionWhere = { status: { in: ["NEW_REQUEST", "ACCEPTED", "PARTIALLY_RECEIVED", "NOT_RECEIVED"] } };
-    openWhere = { status: { in: OPEN_STATUSES } };
-    historyWhere = { status: { in: CLOSED_STATUSES } };
   } else {
-    // Store Supervisor — assigns an operator, but only for requests actually routed to THEM
-    // specifically (not just any accepted request) — the two-hop chain is Inventory Manager
-    // routes to a Supervisor, then that Supervisor assigns the Delivery Operator.
-    actionTitle = "Requests Awaiting Assignment";
-    actionWhere = { routedToUserId: currentUser.id, status: { in: ["ACCEPTED", "PARTIALLY_RECEIVED", "NOT_RECEIVED"] } };
+    // Admin, Inventory Manager, Store Supervisor all see every request — they're each
+    // responsible for the whole queue at their stage, not just requests tied to them.
     openWhere = { status: { in: OPEN_STATUSES } };
     historyWhere = { status: { in: CLOSED_STATUSES } };
   }
+  if (params.type) {
+    openWhere = { ...openWhere, requestType: params.type };
+    historyWhere = { ...historyWhere, requestType: params.type };
+  }
 
-  const [actionRows, openRows, historyRows] = await Promise.all([
-    prisma.stockRequest.findMany({ where: actionWhere, include, orderBy: { requiredByDate: "asc" } }),
+  const [openRows, historyRows] = await Promise.all([
     prisma.stockRequest.findMany({ where: openWhere, include, orderBy: { createdAt: "desc" }, take: 50 }),
     prisma.stockRequest.findMany({ where: historyWhere, include, orderBy: { updatedAt: "desc" }, take: 30 }),
   ]);
@@ -159,15 +148,24 @@ export default async function RequestsPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-lg font-semibold text-foreground">Requests</h1>
-        <p className="mt-1 text-sm text-muted">
-          One request moves from Indentor to Store Supervisor to Store/Delivery Operator and back to the Indentor — the same Request ID throughout. No single person performs the whole workflow.
-        </p>
       </div>
 
       <Panel>
+        <form className="grid grid-cols-2 gap-3 sm:grid-cols-4" method="GET">
+          <label className="text-xs text-muted">
+            Type
+            <select name="type" defaultValue={params.type ?? ""} className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
+              <option value="">All types</option>
+              {REQUEST_TYPES.map((t) => (
+                <option key={t} value={t}>{t === "SPARE" ? "Spare" : "Material"}</option>
+              ))}
+            </select>
+          </label>
+        </form>
+      </Panel>
+
+      <Panel>
         <RequestTabs
-          actionLabel={actionTitle}
-          actionContent={<RequestTable rows={actionRows} emptyTitle="Nothing needs your action right now" currentUser={currentUser} supervisors={supervisors} operators={operators} exportFilename="requests-action.csv" />}
           openContent={<RequestTable rows={openRows} emptyTitle="No open requests" currentUser={currentUser} supervisors={supervisors} operators={operators} exportFilename="requests-open.csv" />}
           historyContent={<RequestTable rows={historyRows} emptyTitle="No completed or rejected requests yet" currentUser={currentUser} supervisors={supervisors} operators={operators} exportFilename="requests-history.csv" />}
           newRequestContent={

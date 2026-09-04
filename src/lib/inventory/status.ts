@@ -1,20 +1,21 @@
 import type { StockStatus } from "@/lib/domain/enums";
 
 /**
- * CRITICAL: stock < safety stock. LOW: stock < minimum stock. HEALTHY: otherwise.
- * Shared by Dashboard, Inventory, and Material Detail so every screen agrees.
+ * CRITICAL: stock < minimum stock. HEALTHY: otherwise. Shared by Dashboard, Inventory, and
+ * Material Detail so every screen agrees. `overstock` is a separate, independent flag (stock >
+ * maximum stock) — it never changes `status`, so a material can be simultaneously HEALTHY and
+ * overstocked. maxStock is optional; callers that don't pass it just never see overstock: true.
  */
-export function classifyStockStatus(args: { currentStock: number; minStock: number | null | undefined; safetyStock: number | null | undefined }): {
-  status: StockStatus;
-  reason: string;
-} {
-  const { currentStock, minStock, safetyStock } = args;
+export function classifyStockStatus(args: {
+  currentStock: number;
+  minStock: number | null | undefined;
+  maxStock?: number | null;
+}): { status: StockStatus; reason: string; overstock: boolean } {
+  const { currentStock, minStock, maxStock } = args;
+  const overstock = maxStock != null && currentStock > maxStock;
 
-  if (safetyStock != null && currentStock < safetyStock) {
-    return { status: "CRITICAL", reason: `Current stock (${currentStock.toLocaleString()}) is below safety stock (${safetyStock.toLocaleString()}).` };
-  }
   if (minStock != null && currentStock < minStock) {
-    return { status: "LOW", reason: `Current stock (${currentStock.toLocaleString()}) is below minimum stock (${minStock.toLocaleString()}).` };
+    return { status: "CRITICAL", reason: `Current stock (${currentStock.toLocaleString()}) is below minimum stock (${minStock.toLocaleString()}).`, overstock };
   }
-  return { status: "HEALTHY", reason: "Current stock is at or above minimum and safety stock." };
+  return { status: "HEALTHY", reason: "Current stock is at or above minimum stock.", overstock };
 }

@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@prisma/client";
-import { REQUEST_STATUSES, DISPATCH_STATUSES, REQUEST_PURPOSES } from "@/lib/domain/enums";
+import { REQUEST_STATUSES, DISPATCH_STATUSES, REQUEST_PURPOSES, REQUEST_TYPES } from "@/lib/domain/enums";
 import type { ReportFilters } from "./types";
 
 export interface RequestReportRow {
@@ -8,6 +8,7 @@ export interface RequestReportRow {
   requestNumber: string;
   materialName: string;
   purpose: string;
+  requestType: string;
   uom: string;
   quantityRequested: number;
   deliveredQuantity: number;
@@ -28,6 +29,7 @@ export interface DispatchReportRow {
   id: string;
   dispatchReference: string;
   materialName: string;
+  category: string;
   uom: string;
   quantity: number;
   customerDestination: string;
@@ -46,11 +48,13 @@ export interface DispatchReportRow {
 export async function getRequestReport(filters: ReportFilters, scopeToUserId?: string, scopeField: "assignedToUserId" | "requestedByUserId" = "assignedToUserId") {
   const status = filters.status && (REQUEST_STATUSES as readonly string[]).includes(filters.status) ? filters.status : undefined;
   const purpose = filters.purpose && (REQUEST_PURPOSES as readonly string[]).includes(filters.purpose) ? filters.purpose : undefined;
+  const requestType = filters.requestType && (REQUEST_TYPES as readonly string[]).includes(filters.requestType) ? filters.requestType : undefined;
   const where: Prisma.StockRequestWhereInput = {
     ...(scopeToUserId ? { [scopeField]: scopeToUserId } : {}),
     ...(filters.materialId ? { materialId: filters.materialId } : {}),
     ...(status ? { status } : {}),
     ...(purpose ? { purpose } : {}),
+    ...(requestType ? { requestType } : {}),
     ...(filters.reference ? { requestNumber: { contains: filters.reference } } : {}),
     ...(filters.userId ? { OR: [{ requestedByUserId: filters.userId }, { assignedToUserId: filters.userId }] } : {}),
     ...(filters.from || filters.to
@@ -78,6 +82,7 @@ export async function getRequestReport(filters: ReportFilters, scopeToUserId?: s
     requestNumber: r.requestNumber,
     materialName: r.material.name,
     purpose: r.purpose,
+    requestType: r.requestType,
     uom: r.material.uom,
     quantityRequested: r.quantityRequested,
     deliveredQuantity: r.deliveredQuantity,
@@ -102,6 +107,7 @@ export async function getDispatchReport(filters: ReportFilters, scopeToUserId?: 
   const where: Prisma.DispatchWhereInput = {
     ...(scopeToUserId ? { assignedToUserId: scopeToUserId } : {}),
     ...(filters.materialId ? { materialId: filters.materialId } : {}),
+    ...(filters.category ? { material: { category: filters.category } } : {}),
     ...(status ? { status } : {}),
     ...(filters.reference ? { dispatchReference: { contains: filters.reference } } : {}),
     ...(filters.userId ? { OR: [{ createdByUserId: filters.userId }, { assignedToUserId: filters.userId }] } : {}),
@@ -120,6 +126,7 @@ export async function getDispatchReport(filters: ReportFilters, scopeToUserId?: 
     id: d.id,
     dispatchReference: d.dispatchReference,
     materialName: d.material.name,
+    category: d.material.category,
     uom: d.material.uom,
     quantity: d.quantity,
     customerDestination: d.customerDestination,

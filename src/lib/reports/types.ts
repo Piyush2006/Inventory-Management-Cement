@@ -11,6 +11,8 @@ export interface ReportFilters {
   reference?: string;
   userId?: string;
   purpose?: string; // REQUEST_PURPOSES value, see requestDispatch.ts's getRequestReport
+  category?: string; // MATERIAL_CATEGORIES value — filters to materials of this category
+  requestType?: string; // REQUEST_TYPES value (Material/Spare), see requestDispatch.ts's getRequestReport
 }
 
 export function parseDateRangeParams(from?: string, to?: string): { from?: Date; to?: Date } {

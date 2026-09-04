@@ -11,8 +11,9 @@ export const dynamic = "force-dynamic";
 export default async function LocationsPage() {
   const [locations, currentUser] = await Promise.all([
     // Excludes the system-managed virtual in-transit location — it's not user-creatable
-    // or editable, so it has no business appearing in this management screen.
-    prisma.location.findMany({ where: { type: { not: IN_TRANSIT_LOCATION_TYPE } }, include: { balances: true }, orderBy: { name: "asc" } }),
+    // or editable, so it has no business appearing in this management screen. Excludes deleted
+    // (active: false) locations too — Delete removes a location from this list entirely.
+    prisma.location.findMany({ where: { type: { not: IN_TRANSIT_LOCATION_TYPE }, active: true }, include: { balances: { include: { material: true } } }, orderBy: { name: "asc" } }),
     getCurrentUser(),
   ]);
   const canManage = MASTER_DATA_ROLES.includes(currentUser.role as UserRole);
@@ -21,9 +22,6 @@ export default async function LocationsPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-lg font-semibold text-foreground">Locations</h1>
-        <p className="mt-1 text-sm text-muted">
-          Add, edit, and deactivate storage locations. Locations with stock on hand are never hard-deleted — only deactivated.
-        </p>
         {!canManage && (
           <p className="mt-2 text-xs text-muted-soft">
             Your role ({ROLE_LABELS[currentUser.role as UserRole]}) has view-only access here — managing locations requires Inventory Manager or Admin.
@@ -34,10 +32,18 @@ export default async function LocationsPage() {
       <Panel title="Locations">
         <LocationsManager
           canEdit={canManage}
-          locations={locations.map((l) => ({
-            id: l.id, name: l.name, type: l.type, capacity: l.capacity, active: l.active,
-            stockQty: l.balances.reduce((s, b) => s + b.quantity, 0),
-          }))}
+          locations={locations.map((l) => {
+            // A location can hold more than one material, and materials aren't all the same
+            // UOM (e.g. Engineering Store holds both MT gearbox oil and Nos spares) — group by
+            // UOM rather than assuming one unit applies to the whole location.
+            const stockByUom = new Map<string, number>();
+            for (const b of l.balances) stockByUom.set(b.material.uom, (stockByUom.get(b.material.uom) ?? 0) + b.quantity);
+            return {
+              id: l.id, name: l.name, type: l.type, capacity: l.capacity, capacityUom: l.capacityUom,
+              stockQty: l.balances.reduce((s, b) => s + b.quantity, 0),
+              stockByUom: Array.from(stockByUom, ([uom, qty]) => ({ uom, qty })),
+            };
+          })}
         />
       </Panel>
     </div>

@@ -198,3 +198,38 @@ export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 // Configuring notification rules reuses the same role set that already manages material/
 // location master data — no new notification-specific role.
 export const NOTIFICATION_CONFIG_ROLES: UserRole[] = MASTER_DATA_ROLES;
+
+// ---------------------------------------------------------------------------
+// Report Scheduling — a persisted delivery preference for an existing /reports tab, not a
+// real cron job (no background job runner in this sandboxed app). "Run Now" is the only way
+// a schedule is ever executed; frequency is a stored label describing intended cadence only.
+// See src/app/reports/schedules-panel.tsx.
+// ---------------------------------------------------------------------------
+export const REPORT_TYPES = ["inventory", "consumption", "movement", "request", "dispatch"] as const;
+export type ReportType = (typeof REPORT_TYPES)[number];
+
+export const REPORT_TYPE_LABELS: Record<ReportType, string> = {
+  inventory: "Inventory",
+  consumption: "Consumption",
+  movement: "Stock Movement",
+  request: "Request",
+  dispatch: "Dispatch",
+};
+
+export const REPORT_SCHEDULE_FREQUENCIES = ["DAILY", "WEEKLY", "MONTHLY"] as const;
+export type ReportScheduleFrequency = (typeof REPORT_SCHEDULE_FREQUENCIES)[number];
+
+export const REPORT_SCHEDULE_STATUSES = ["ENABLED", "DISABLED"] as const;
+export type ReportScheduleStatus = (typeof REPORT_SCHEDULE_STATUSES)[number];
+
+// Deliberately excludes RELEVANT_USER (NOTIFICATION_RECIPIENT_TYPES' third option) — that only
+// makes sense resolved off a live workflow record, which a time-based schedule doesn't have.
+export const REPORT_SCHEDULE_RECIPIENT_TYPES = ["ROLE", "SPECIFIC_USER"] as const;
+export type ReportScheduleRecipientType = (typeof REPORT_SCHEDULE_RECIPIENT_TYPES)[number];
+
+// Day of week for a WEEKLY schedule — dayOfMonth (MONTHLY) is a plain 1-31 Int, no enum needed.
+export const DAYS_OF_WEEK = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"] as const;
+export type DayOfWeek = (typeof DAYS_OF_WEEK)[number];
+export const DAY_OF_WEEK_LABELS: Record<DayOfWeek, string> = {
+  MONDAY: "Monday", TUESDAY: "Tuesday", WEDNESDAY: "Wednesday", THURSDAY: "Thursday", FRIDAY: "Friday", SATURDAY: "Saturday", SUNDAY: "Sunday",
+};

@@ -115,10 +115,13 @@ export const BRUCE_INTENTS: BruceIntent[] = [
     requiresEntity: false,
     match: (q) => q.includes("below minimum") || q.includes("low stock") || (q.includes("approaching minimum")),
     handle: async () => {
-      const rows = await getMaterialsByStatus("LOW");
+      // "LOW" can no longer be produced by classifyStockStatus (Min is now the only understock
+      // threshold) — "below minimum" and "critical" are the same condition now, so this
+      // deliberately reads CRITICAL, not a dead LOW status.
+      const rows = await getMaterialsByStatus("CRITICAL");
       if (rows.length === 0) return { text: "No materials are currently below their minimum stock level." };
       const lines = rows.map((r) => `${r.material.name}: ${formatQty(r.unrestricted, r.material.uom)} (min ${formatQty(r.material.minStock ?? 0, r.material.uom)})`).join("\n");
-      return { text: `${rows.length} material${rows.length === 1 ? "" : "s"} below minimum stock:\n${lines}`, links: [{ label: "View Inventory", href: "/inventory?status=LOW" }] };
+      return { text: `${rows.length} material${rows.length === 1 ? "" : "s"} below minimum stock:\n${lines}`, links: [{ label: "View Inventory", href: "/inventory?status=CRITICAL" }] };
     },
   },
   {
@@ -128,7 +131,7 @@ export const BRUCE_INTENTS: BruceIntent[] = [
     handle: async () => {
       const rows = await getMaterialsByStatus("CRITICAL");
       if (rows.length === 0) return { text: "No materials are currently at critical stock." };
-      const lines = rows.map((r) => `${r.material.name}: ${formatQty(r.unrestricted, r.material.uom)} (safety stock ${formatQty(r.material.safetyStock ?? 0, r.material.uom)})`).join("\n");
+      const lines = rows.map((r) => `${r.material.name}: ${formatQty(r.unrestricted, r.material.uom)} (min stock ${formatQty(r.material.minStock ?? 0, r.material.uom)})`).join("\n");
       return { text: `${rows.length} material${rows.length === 1 ? "" : "s"} at critical stock:\n${lines}`, links: [{ label: "View Inventory", href: "/inventory?status=CRITICAL" }] };
     },
   },

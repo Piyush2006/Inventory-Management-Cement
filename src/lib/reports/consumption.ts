@@ -8,6 +8,7 @@ export interface ConsumptionDetailRow {
   timestamp: Date;
   materialId: string;
   materialName: string;
+  category: string;
   uom: string;
   locationName: string;
   quantity: number;
@@ -17,6 +18,7 @@ export interface ConsumptionDetailRow {
 export interface ConsumptionAggregateRow {
   materialId: string;
   materialName: string;
+  category: string;
   uom: string;
   totalConsumed: number;
   averageDailyConsumption: number;
@@ -36,6 +38,7 @@ export async function getConsumptionReport(filters: ReportFilters) {
       timestamp: { gte: from, lte: to },
       ...(filters.materialId ? { materialId: filters.materialId } : {}),
       ...(filters.locationId ? { sourceLocationId: filters.locationId } : {}),
+      ...(filters.category ? { material: { category: filters.category } } : {}),
     },
     include: { material: true, sourceLocation: true },
     orderBy: { timestamp: "desc" },
@@ -46,20 +49,21 @@ export async function getConsumptionReport(filters: ReportFilters) {
     timestamp: r.timestamp,
     materialId: r.materialId,
     materialName: r.material.name,
+    category: r.material.category,
     uom: r.uom,
     locationName: r.sourceLocation?.name ?? "—",
     quantity: r.quantity,
     reference: r.reference,
   }));
 
-  const totalsByMaterial = new Map<string, { materialName: string; uom: string; total: number }>();
+  const totalsByMaterial = new Map<string, { materialName: string; category: string; uom: string; total: number }>();
   for (const r of rows) {
-    const entry = totalsByMaterial.get(r.materialId) ?? { materialName: r.material.name, uom: r.uom, total: 0 };
+    const entry = totalsByMaterial.get(r.materialId) ?? { materialName: r.material.name, category: r.material.category, uom: r.uom, total: 0 };
     entry.total += r.quantity;
     totalsByMaterial.set(r.materialId, entry);
   }
   const aggregateRows: ConsumptionAggregateRow[] = [...totalsByMaterial.entries()]
-    .map(([materialId, v]) => ({ materialId, materialName: v.materialName, uom: v.uom, totalConsumed: v.total, averageDailyConsumption: v.total / spanDays }))
+    .map(([materialId, v]) => ({ materialId, materialName: v.materialName, category: v.category, uom: v.uom, totalConsumed: v.total, averageDailyConsumption: v.total / spanDays }))
     .sort((a, b) => b.totalConsumed - a.totalConsumed);
 
   return { from, to, detailRows, aggregateRows };

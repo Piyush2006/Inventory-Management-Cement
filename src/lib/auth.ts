@@ -31,6 +31,12 @@ export async function setCurrentUser(userId: string) {
   store.set(CURRENT_USER_COOKIE, userId, { path: "/", sameSite: "lax" });
 }
 
+/** Clears the demo session — getCurrentUser()'s existing fallback (first active user) takes over. */
+export async function clearCurrentUser() {
+  const store = await cookies();
+  store.delete(CURRENT_USER_COOKIE);
+}
+
 export function requireRole(user: { role: string; name: string }, allowed: UserRole[]) {
   if (!allowed.includes(user.role as UserRole)) {
     throw new PermissionError(`${user.name} (${user.role}) is not permitted to perform this action — requires ${allowed.join(" or ")}.`);
@@ -58,4 +64,12 @@ export function restrictToRequestsOnly(user: { role: string }) {
  */
 export function restrictStockOperationsFromSupervisor(user: { role: string }) {
   if (user.role === "STORE_SUPERVISOR") redirect("/");
+}
+
+/**
+ * Users & Roles has no legitimate content for anyone but Admin (unlike e.g. Notifications, where
+ * every role has its own inbox) — a full redirect guard, same shape as the two guards above.
+ */
+export function restrictToAdminOnly(user: { role: string }) {
+  if (user.role !== "ADMIN") redirect("/");
 }

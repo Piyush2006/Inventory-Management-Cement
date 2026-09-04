@@ -1,11 +1,24 @@
 "use client";
 
 import { Fragment, useState, useTransition } from "react";
-import { actionSaveLocation, actionDeactivateLocation } from "@/app/actions";
+import { actionSaveLocation, actionDeleteLocation } from "@/app/actions";
 import { LOCATION_TYPES } from "@/lib/domain/enums";
 import { formatNumber } from "@/lib/format";
+import { EditIcon, DeleteIcon } from "@/components/ui";
 
-type Location = { id: string; name: string; type: string; capacity: number | null; active: boolean; stockQty: number };
+// Same two values materials-manager.tsx's own UOM select offers — no new vocabulary, no
+// conversion logic. A location's capacity UOM is independent of any material's own uom.
+const CAPACITY_UOMS = ["MT", "Nos"] as const;
+
+type Location = {
+  id: string; name: string; type: string; capacity: number | null; capacityUom: string | null;
+  stockQty: number; stockByUom: { uom: string; qty: number }[];
+};
+
+function formatStock(l: Location) {
+  if (l.stockByUom.length === 0) return formatNumber(l.stockQty);
+  return l.stockByUom.map((s) => `${formatNumber(s.qty)} ${s.uom}`).join(", ");
+}
 
 function LocationFields({ location }: { location?: Location }) {
   return (
@@ -24,11 +37,14 @@ function LocationFields({ location }: { location?: Location }) {
       </label>
       <label className="text-xs text-muted">
         Capacity (optional)
-        <input name="capacity" type="number" step="any" defaultValue={location?.capacity ?? ""} className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
-      </label>
-      <label className="flex items-center gap-2 self-end text-xs text-muted">
-        <input name="active" type="checkbox" defaultChecked={location?.active ?? true} className="h-4 w-4 rounded border-border" />
-        Active
+        <div className="mt-1 flex gap-1.5">
+          <input name="capacity" type="number" step="any" defaultValue={location?.capacity ?? ""} className="block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
+          <select name="capacityUom" defaultValue={location?.capacityUom ?? CAPACITY_UOMS[0]} className="block w-24 shrink-0 rounded-md border border-border bg-surface-raised px-2 py-1.5 text-sm text-foreground outline-none focus:border-accent">
+            {CAPACITY_UOMS.map((u) => (
+              <option key={u} value={u}>{u}</option>
+            ))}
+          </select>
+        </div>
       </label>
     </div>
   );
@@ -78,40 +94,44 @@ export function LocationsManager({ locations, canEdit }: { locations: Location[]
               <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted">Type</th>
               <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-muted">Capacity</th>
               <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-muted">Current Stock</th>
-              <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted">Active</th>
-              <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted"></th>
+              <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted">Actions</th>
             </tr>
           </thead>
           <tbody>
             {locations.map((l) => (
               <Fragment key={l.id}>
-                <tr className="border-b border-border-soft last:border-0">
+                <tr className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                   <td className="px-3 py-2.5 text-sm text-foreground">{l.name}</td>
                   <td className="px-3 py-2.5 text-xs text-muted">{l.type}</td>
-                  <td className="px-3 py-2.5 text-right text-sm tabular text-muted">{l.capacity != null ? formatNumber(l.capacity) : "—"}</td>
-                  <td className="px-3 py-2.5 text-right text-sm tabular text-muted">{formatNumber(l.stockQty)}</td>
-                  <td className="px-3 py-2.5 text-xs">{l.active ? <span className="text-[var(--status-healthy)]">Active</span> : <span className="text-muted-soft">Inactive</span>}</td>
+                  <td className="px-3 py-2.5 text-right text-sm tabular text-muted">{l.capacity != null ? `${formatNumber(l.capacity)}${l.capacityUom ? ` ${l.capacityUom}` : ""}` : "—"}</td>
+                  <td className="px-3 py-2.5 text-right text-sm tabular text-muted">{formatStock(l)}</td>
                   <td className="px-3 py-2.5">
                     {canEdit ? (
-                      <div className="flex gap-2">
-                        <button onClick={() => setEditingId(editingId === l.id ? null : l.id)} className="text-xs text-accent hover:underline">
-                          {editingId === l.id ? "Close" : "Edit"}
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => setEditingId(editingId === l.id ? null : l.id)}
+                          title={editingId === l.id ? "Close" : "Edit"}
+                          aria-label={editingId === l.id ? "Close edit form" : "Edit location"}
+                          className="rounded p-1.5 text-muted hover:bg-surface-raised hover:text-accent"
+                        >
+                          <EditIcon />
                         </button>
                         <button
                           onClick={() => {
                             const fd = new FormData();
                             fd.set("id", l.id);
-                            fd.set("active", (!l.active).toString());
                             setError(null);
                             startTransition(async () => {
-                              const res = await actionDeactivateLocation(fd);
+                              const res = await actionDeleteLocation(fd);
                               if (!res.ok) setError(res.error ?? "Failed");
                             });
                           }}
                           disabled={pending}
-                          className="text-xs text-muted hover:text-foreground disabled:opacity-40"
+                          title="Delete"
+                          aria-label="Delete location"
+                          className="rounded p-1.5 text-muted hover:bg-[var(--status-critical-bg)] hover:text-[var(--status-critical)] disabled:opacity-40"
                         >
-                          {l.active ? "Deactivate" : "Reactivate"}
+                          <DeleteIcon />
                         </button>
                       </div>
                     ) : (
@@ -121,7 +141,7 @@ export function LocationsManager({ locations, canEdit }: { locations: Location[]
                 </tr>
                 {canEdit && editingId === l.id && (
                   <tr className="border-b border-border-soft">
-                    <td colSpan={6} className="bg-surface-raised px-3 py-3">
+                    <td colSpan={5} className="bg-surface-raised px-3 py-3">
                       <form className="space-y-3" action={(fd) => submit(fd, () => setEditingId(null))}>
                         <input type="hidden" name="id" value={l.id} />
                         <LocationFields location={l} />

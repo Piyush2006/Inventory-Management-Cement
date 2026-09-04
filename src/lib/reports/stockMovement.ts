@@ -7,6 +7,7 @@ export interface StockMovementRow {
   id: string;
   timestamp: Date;
   materialName: string;
+  category: string;
   uom: string;
   transactionType: string;
   quantity: number;
@@ -24,6 +25,7 @@ function buildWhere(filters: ReportFilters): Prisma.InventoryTransactionWhereInp
   return {
     ...(filters.materialId ? { materialId: filters.materialId } : {}),
     ...(filters.locationId ? { OR: [{ sourceLocationId: filters.locationId }, { destinationLocationId: filters.locationId }] } : {}),
+    ...(filters.category ? { material: { category: filters.category } } : {}),
     ...(types ? { transactionType: { in: types } } : {}),
     ...(filters.reference ? { reference: { contains: filters.reference } } : {}),
     ...(filters.userId ? { userId: filters.userId } : {}),
@@ -48,6 +50,7 @@ function toRows(
     id: t.id,
     timestamp: t.timestamp,
     materialName: t.material.name,
+    category: t.material.category,
     uom: t.uom,
     transactionType: t.transactionType,
     quantity: t.quantity,

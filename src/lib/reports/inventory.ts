@@ -5,6 +5,7 @@ import type { ReportFilters } from "./types";
 export interface MaterialInventoryRow {
   materialId: string;
   materialName: string;
+  category: string;
   uom: string;
   opening: number;
   received: number;
@@ -58,7 +59,7 @@ export async function getInventoryReport(filters: ReportFilters) {
   const from = filters.from ?? new Date(to.getTime() - DEFAULT_WINDOW_DAYS * 86400000);
 
   const materials = await prisma.material.findMany({
-    where: { active: true, ...(filters.materialId ? { id: filters.materialId } : {}) },
+    where: { active: true, ...(filters.materialId ? { id: filters.materialId } : {}), ...(filters.category ? { category: filters.category } : {}) },
     orderBy: { name: "asc" },
   });
 
@@ -113,6 +114,7 @@ export async function getInventoryReport(filters: ReportFilters) {
   const materialRows: MaterialInventoryRow[] = materials.map((m) => ({
     materialId: m.id,
     materialName: m.name,
+    category: m.category,
     uom: m.uom,
     opening: openingByMaterial.get(m.id) ?? 0,
     received: buckets.received.get(m.id) ?? 0,

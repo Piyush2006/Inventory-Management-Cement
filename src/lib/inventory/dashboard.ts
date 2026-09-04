@@ -38,7 +38,7 @@ export async function getDashboardData() {
     const currentStock = m.balances.reduce((s, b) => s + b.quantity, 0);
     if (m.uom === "MT") totalInventoryMt += currentStock;
     const unrestrictedStock = Math.max(0, currentStock - (nonUnrestrictedByMaterial.get(m.id) ?? 0));
-    const { status, reason } = classifyStockStatus({ currentStock: unrestrictedStock, minStock: m.minStock, safetyStock: m.safetyStock });
+    const { status, reason } = classifyStockStatus({ currentStock: unrestrictedStock, minStock: m.minStock });
     return { material: m, currentStock, unrestrictedStock, status, reason };
   });
 
@@ -101,7 +101,7 @@ export async function getDashboardData() {
       title: r.material.name,
       subtitle: "Material",
       line1: `${formatQty(r.unrestrictedStock, r.material.uom)} available`,
-      line2: r.material.safetyStock != null ? `Safety Stock: ${formatQty(r.material.safetyStock, r.material.uom)}` : "Below safety stock",
+      line2: r.material.minStock != null ? `Minimum Stock: ${formatQty(r.material.minStock, r.material.uom)}` : "Below minimum stock",
       badgeLabel: "CRITICAL",
     })),
     ...notReceivedRequests.map((req) => ({

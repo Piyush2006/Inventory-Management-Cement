@@ -31,10 +31,12 @@ export async function triggerNotification(event: NotificationEvent, context: Not
     const variables: Record<string, string> = {};
     if (context.reference) variables.reference = context.reference;
     if (material) variables.material = material.name;
+    if (material) variables.category = material.category === "SPARE" ? "Spare" : "Material";
     if (location) variables.location = location.name;
     if (context.quantity != null) variables.quantity = withUom(context.quantity);
     if (context.currentStock != null) variables.currentStock = withUom(context.currentStock);
     if (context.minimumStock != null) variables.minimumStock = withUom(context.minimumStock);
+    if (context.requestType) variables.type = context.requestType === "SPARE" ? "Spare" : "Material";
 
     const relatedRecordType = NOTIFICATION_EVENT_META[event].relatedRecordType;
 
