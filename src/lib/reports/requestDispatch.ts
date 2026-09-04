@@ -1,12 +1,13 @@
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@prisma/client";
-import { REQUEST_STATUSES, DISPATCH_STATUSES } from "@/lib/domain/enums";
+import { REQUEST_STATUSES, DISPATCH_STATUSES, REQUEST_PURPOSES } from "@/lib/domain/enums";
 import type { ReportFilters } from "./types";
 
 export interface RequestReportRow {
   id: string;
   requestNumber: string;
   materialName: string;
+  purpose: string;
   uom: string;
   quantityRequested: number;
   deliveredQuantity: number;
@@ -44,10 +45,12 @@ export interface DispatchReportRow {
  */
 export async function getRequestReport(filters: ReportFilters, scopeToUserId?: string, scopeField: "assignedToUserId" | "requestedByUserId" = "assignedToUserId") {
   const status = filters.status && (REQUEST_STATUSES as readonly string[]).includes(filters.status) ? filters.status : undefined;
+  const purpose = filters.purpose && (REQUEST_PURPOSES as readonly string[]).includes(filters.purpose) ? filters.purpose : undefined;
   const where: Prisma.StockRequestWhereInput = {
     ...(scopeToUserId ? { [scopeField]: scopeToUserId } : {}),
     ...(filters.materialId ? { materialId: filters.materialId } : {}),
     ...(status ? { status } : {}),
+    ...(purpose ? { purpose } : {}),
     ...(filters.reference ? { requestNumber: { contains: filters.reference } } : {}),
     ...(filters.userId ? { OR: [{ requestedByUserId: filters.userId }, { assignedToUserId: filters.userId }] } : {}),
     ...(filters.from || filters.to
@@ -74,6 +77,7 @@ export async function getRequestReport(filters: ReportFilters, scopeToUserId?: s
     id: r.id,
     requestNumber: r.requestNumber,
     materialName: r.material.name,
+    purpose: r.purpose,
     uom: r.material.uom,
     quantityRequested: r.quantityRequested,
     deliveredQuantity: r.deliveredQuantity,

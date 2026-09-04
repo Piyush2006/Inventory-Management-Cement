@@ -41,8 +41,8 @@ function RequestTable({
       <div className="flex justify-end">
         <ExportCsvButton
           filename={exportFilename}
-          headers={["Request ID", "Material", "Qty Requested", "Requested By", "Routed To", "Assigned To", "Required By", "Status"]}
-          rows={rows.map((r) => [r.requestNumber, r.material.name, r.quantityRequested, r.requestedBy.name, r.routedTo?.name ?? "", r.assignedTo?.name ?? "", formatDate(r.requiredByDate), r.status])}
+          headers={["Request ID", "Material", "Purpose", "Qty Requested", "Requested By", "Routed To", "Assigned To", "Required By", "Status"]}
+          rows={rows.map((r) => [r.requestNumber, r.material.name, r.purpose === "ISSUE" ? "Issue" : "Transfer", r.quantityRequested, r.requestedBy.name, r.routedTo?.name ?? "", r.assignedTo?.name ?? "", formatDate(r.requiredByDate), r.status])}
         />
       </div>
       <div className="overflow-x-auto scrollbar-thin">
@@ -51,6 +51,7 @@ function RequestTable({
           <tr className="border-b border-border-soft">
             <Th>Request ID</Th>
             <Th>Material</Th>
+            <Th>Purpose</Th>
             <Th className="text-right">Qty</Th>
             <Th>Requested By</Th>
             <Th>Assigned To</Th>
@@ -66,6 +67,7 @@ function RequestTable({
               id={r.id}
               requestNumber={r.requestNumber}
               materialName={r.material.name}
+              purpose={r.purpose}
               uom={r.material.uom}
               quantityRequested={r.quantityRequested}
               requestedByName={r.requestedBy.name}
@@ -92,8 +94,9 @@ function RequestTable({
 }
 
 export default async function RequestsPage() {
-  const [materials, locations, supervisors, operators, currentUser] = await Promise.all([
-    prisma.material.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
+  const [materials, spareMaterials, locations, supervisors, operators, currentUser] = await Promise.all([
+    prisma.material.findMany({ where: { active: true, category: { not: "SPARE" } }, orderBy: { name: "asc" } }),
+    prisma.material.findMany({ where: { active: true, category: "SPARE" }, orderBy: { name: "asc" } }),
     // Excludes the virtual in-transit location from the From/To pickers — a request can only
     // move material between two real locations, never to/from the system's internal bucket.
     prisma.location.findMany({ where: { active: true, type: { not: IN_TRANSIT_LOCATION_TYPE } }, orderBy: { name: "asc" } }),
@@ -170,6 +173,7 @@ export default async function RequestsPage() {
           newRequestContent={
             <NewRequestForm
               materials={materials.map((m) => ({ id: m.id, name: m.name, uom: m.uom }))}
+              spareMaterials={spareMaterials.map((m) => ({ id: m.id, name: m.name, uom: m.uom, equipmentRef: m.equipmentRef }))}
               locations={locations.map((l) => ({ id: l.id, name: l.name }))}
             />
           }

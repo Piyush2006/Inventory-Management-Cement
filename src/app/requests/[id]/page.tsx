@@ -109,14 +109,33 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
           <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
             <dt className="text-muted">Material</dt>
             <dd className="text-foreground">{request.material.name}</dd>
+            {request.requestType === "SPARE" && (
+              <>
+                <dt className="text-muted">Type</dt>
+                <dd className="text-foreground">Spare</dd>
+                <dt className="text-muted">Equipment / Asset</dt>
+                <dd className="text-foreground">{request.equipmentRef ?? "—"}</dd>
+              </>
+            )}
+            <dt className="text-muted">Purpose</dt>
+            <dd className="text-foreground">{request.purpose === "ISSUE" ? "Issue" : "Transfer"}</dd>
             <dt className="text-muted">Priority</dt>
             <dd className="text-foreground">{request.priority}</dd>
             <dt className="text-muted">Required By</dt>
             <dd className="text-foreground">{formatDate(request.requiredByDate)}</dd>
             <dt className="text-muted">From Location</dt>
             <dd className="text-foreground">{request.fromLocation.name}</dd>
-            <dt className="text-muted">To Location</dt>
-            <dd className="text-foreground">{request.toLocation.name}</dd>
+            {request.purpose === "ISSUE" ? (
+              <>
+                <dt className="text-muted">Issued To</dt>
+                <dd className="text-foreground">{request.issuedTo ?? "—"}</dd>
+              </>
+            ) : (
+              <>
+                <dt className="text-muted">To Location</dt>
+                <dd className="text-foreground">{request.toLocation?.name ?? "—"}</dd>
+              </>
+            )}
             <dt className="text-muted">Reason</dt>
             <dd className="text-foreground">{request.reason ?? "—"}</dd>
             <dt className="text-muted">Notes</dt>

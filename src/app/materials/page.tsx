@@ -39,6 +39,7 @@ export default async function MaterialsPage() {
             id: m.id, materialCode: m.materialCode, name: m.name, category: m.category, uom: m.uom,
             minStock: m.minStock, safetyStock: m.safetyStock, defaultLocationId: m.defaultLocationId,
             active: m.active,
+            partNumber: m.partNumber, manufacturer: m.manufacturer, equipmentRef: m.equipmentRef, criticality: m.criticality,
           }))}
           locations={locations.map((l) => ({ id: l.id, name: l.name }))}
         />

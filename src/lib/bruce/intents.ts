@@ -196,6 +196,24 @@ export const BRUCE_INTENTS: BruceIntent[] = [
     },
   },
   {
+    key: "issued_this_period",
+    requiresEntity: false,
+    match: (q) => q.includes("issu"), // "issued"/"issue" — matches Material and Spare Issue requests alike
+    handle: async (ctx) => {
+      const period = extractPeriod(ctx.question);
+      const [scopeUserId, scopeField] = requestScope(ctx.currentUser);
+      // Filtered by when the request was raised (getRequestReport's only date axis, same
+      // precision level as consumption_for_period below) — deliveredQuantity is what actually
+      // left the source via the Issue-purpose CONSUMPTION posting at execution.
+      const { rows } = await getRequestReport({ purpose: "ISSUE", from: period.from, to: period.to }, scopeUserId, scopeField);
+      const issued = rows.filter((r) => r.deliveredQuantity > 1e-9);
+      if (issued.length === 0) return { text: `No Issue requests were completed for ${period.label}.`, links: [{ label: "View Requests", href: "/requests" }] };
+      const top = [...issued].sort((a, b) => b.deliveredQuantity - a.deliveredQuantity).slice(0, 5);
+      const lines = top.map((r) => `${r.materialName} ${formatQty(r.deliveredQuantity, r.uom)} (${r.requestNumber})`).join("\n");
+      return { text: `${issued.length} Issue request${issued.length === 1 ? "" : "s"} for ${period.label}:\n${lines}`, links: [{ label: "View Request Report", href: "/reports?tab=request" }] };
+    },
+  },
+  {
     key: "delayed_oldest_request",
     requiresEntity: false,
     match: (q) => q.includes("delay") || q.includes("longest") || q.includes("oldest"),

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Panel } from "@/components/ui";
 
-export type FilterField = "dateRange" | "material" | "location" | "operation" | "status" | "reference" | "user";
+export type FilterField = "dateRange" | "material" | "location" | "operation" | "status" | "reference" | "user" | "purpose";
 
 type Option = { value: string; label: string };
 type StatusOption = Option & { group?: string };
@@ -87,6 +87,16 @@ export function ReportFilterBar({
               {operationOptions.map((o) => (
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
+            </select>
+          </label>
+        )}
+        {fields.includes("purpose") && (
+          <label className="text-xs text-muted">
+            Purpose
+            <select name="purpose" defaultValue={params.purpose ?? ""} className={inputClass}>
+              <option value="">All Purposes</option>
+              <option value="TRANSFER">Transfer</option>
+              <option value="ISSUE">Issue</option>
             </select>
           </label>
         )}

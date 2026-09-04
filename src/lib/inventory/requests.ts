@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { postTransferOut, postTransferIn } from "@/lib/inventory/ledger";
+import { postTransferOut, postTransferIn, postMovement } from "@/lib/inventory/ledger";
 import { reconcileQualityBalances } from "@/lib/inventory/quality";
 import { requireRole, PermissionError } from "@/lib/auth";
 import { ACCEPT_REJECT_ROLES, ROUTE_ROLES, ASSIGN_ROLES, OPERATOR_ROLES, ADMIN_ROLE } from "@/lib/domain/enums";
@@ -39,20 +39,35 @@ export async function createStockRequest(input: {
   reason?: string;
   note?: string;
   fromLocationId: string;
-  toLocationId: string;
+  // Required for purpose TRANSFER (the default), not used/required for ISSUE — see `purpose`.
+  toLocationId?: string;
   requestedByUserId: string;
+  // Spare Management — a spare request is a plain StockRequest with this discriminator set.
+  // Defaults to MATERIAL so every existing call site is unaffected.
+  requestType?: "MATERIAL" | "SPARE";
+  equipmentRef?: string;
+  // Request Purpose — TRANSFER (default, original behavior: move stock to toLocationId) or
+  // ISSUE (stock leaves fromLocationId for use/consumption at issuedTo; no toLocationId).
+  purpose?: "TRANSFER" | "ISSUE";
+  issuedTo?: string;
 }) {
   if (input.quantityRequested <= 0) throw new RequestError("Requested quantity must be greater than zero");
-  if (input.fromLocationId === input.toLocationId) throw new RequestError("From and To locations must be different");
+  const purpose = input.purpose ?? "TRANSFER";
+  if (purpose === "TRANSFER") {
+    if (!input.toLocationId) throw new RequestError("A To location is required for a Transfer request");
+    if (input.fromLocationId === input.toLocationId) throw new RequestError("From and To locations must be different");
+  } else {
+    if (!input.issuedTo?.trim()) throw new RequestError("Issued To is required for an Issue request");
+  }
 
   const [requester, material, fromLocation, toLocation] = await Promise.all([
     prisma.user.findUniqueOrThrow({ where: { id: input.requestedByUserId } }),
     prisma.material.findUniqueOrThrow({ where: { id: input.materialId } }),
     prisma.location.findUniqueOrThrow({ where: { id: input.fromLocationId } }),
-    prisma.location.findUniqueOrThrow({ where: { id: input.toLocationId } }),
+    input.toLocationId ? prisma.location.findUniqueOrThrow({ where: { id: input.toLocationId } }) : Promise.resolve(null),
   ]);
   if (!material.active) throw new RequestError("Material is not active");
-  if (!fromLocation.active || !toLocation.active) throw new RequestError("From and To locations must be active");
+  if (!fromLocation.active || (toLocation && !toLocation.active)) throw new RequestError("From and To locations must be active");
 
   const request = await prisma.stockRequest.create({
     data: {
@@ -64,10 +79,14 @@ export async function createStockRequest(input: {
       reason: input.reason,
       note: input.note,
       fromLocationId: input.fromLocationId,
-      toLocationId: input.toLocationId,
+      toLocationId: purpose === "TRANSFER" ? input.toLocationId : undefined,
       requestedByUserId: requester.id,
       requestedByRole: requester.role,
       status: "NEW_REQUEST",
+      requestType: input.requestType ?? "MATERIAL",
+      equipmentRef: input.equipmentRef,
+      purpose,
+      issuedTo: purpose === "ISSUE" ? input.issuedTo : undefined,
     },
   });
   await logEvent({ stockRequestId: request.id, action: "REQUEST_CREATED", userId: requester.id, role: requester.role, quantity: input.quantityRequested, fromLocationId: input.fromLocationId, toLocationId: input.toLocationId, reason: input.reason });
@@ -163,7 +182,7 @@ export async function assignOperator(requestId: string, operatorUserId: string, 
   }
 
   const updated = await prisma.stockRequest.update({ where: { id: requestId }, data: { status: "ASSIGNED", assignedToUserId: operator.id, assignedByUserId: user.id, assignedAt: new Date() } });
-  await logEvent({ stockRequestId: requestId, action: "ASSIGNED", userId: user.id, role: user.role, quantity: remainingToMove > 1e-6 ? remainingToMove : undefined, fromLocationId: request.fromLocationId, toLocationId: request.toLocationId, reason: `Assigned to ${operator.name}` });
+  await logEvent({ stockRequestId: requestId, action: "ASSIGNED", userId: user.id, role: user.role, quantity: remainingToMove > 1e-6 ? remainingToMove : undefined, fromLocationId: request.fromLocationId, toLocationId: request.toLocationId ?? undefined, reason: `Assigned to ${operator.name}` });
   return updated;
 }
 
@@ -184,16 +203,24 @@ export async function startDelivery(requestId: string, actingUserId: string) {
   const quantity = request.quantityRequested - request.deliveredQuantity;
   if (quantity > 1e-6) {
     const material = await prisma.material.findUniqueOrThrow({ where: { id: request.materialId } });
-    await postTransferOut({ materialId: request.materialId, quantity, uom: material.uom, sourceLocationId: request.fromLocationId, reference: request.requestNumber, userId: user.id });
-    // postTransferOut's source leg allows negative on hand (stock-sufficiency validation is
-    // deliberately disabled on this path) — if the source had QC Hold/Blocked stock recorded,
-    // On Hand can now sit below it. Self-corrects rather than gating this frozen path.
+    if (request.purpose === "ISSUE") {
+      // No destination location to move through — the stock is being consumed/used, not
+      // relocated. Posts straight through the existing Consume ledger mechanism, same as the
+      // Stock Operations "Consume" tab, just triggered from the request lifecycle instead of
+      // a direct walk-up action.
+      await postMovement({ materialId: request.materialId, transactionType: "CONSUMPTION", quantity, uom: material.uom, locationId: request.fromLocationId, reference: request.requestNumber, processName: request.issuedTo ?? undefined, userId: user.id });
+    } else {
+      await postTransferOut({ materialId: request.materialId, quantity, uom: material.uom, sourceLocationId: request.fromLocationId, reference: request.requestNumber, userId: user.id });
+    }
+    // Both paths allow negative on hand (stock-sufficiency validation is deliberately disabled
+    // here) — if the source had QC Hold/Blocked stock recorded, On Hand can now sit below it.
+    // Self-corrects rather than gating this frozen path.
     await reconcileQualityBalances(request.materialId, request.fromLocationId);
     await prisma.stockReservation.updateMany({ where: { stockRequestId: requestId, status: "ACTIVE" }, data: { status: "RELEASED", releasedAt: new Date() } });
   }
 
   const updated = await prisma.stockRequest.update({ where: { id: requestId }, data: { deliveredQuantity: request.deliveredQuantity + quantity, status: "IN_TRANSIT" } });
-  await logEvent({ stockRequestId: requestId, action: "IN_TRANSIT", userId: user.id, role: user.role, quantity, fromLocationId: request.fromLocationId, toLocationId: request.toLocationId });
+  await logEvent({ stockRequestId: requestId, action: "IN_TRANSIT", userId: user.id, role: user.role, quantity, fromLocationId: request.fromLocationId, toLocationId: request.toLocationId ?? undefined });
   return updated;
 }
 
@@ -211,7 +238,7 @@ export async function markDelivered(requestId: string, actingUserId: string, del
 
   const updated = await prisma.stockRequest.update({ where: { id: requestId }, data: { status: "DELIVERED", deliveredByUserId: user.id, deliveredAt: new Date(), deliveryNote } });
   const inTransitForRound = request.deliveredQuantity - request.receivedQuantity;
-  await logEvent({ stockRequestId: requestId, action: "DELIVERED", userId: user.id, role: user.role, quantity: inTransitForRound, toLocationId: request.toLocationId, reason: deliveryNote });
+  await logEvent({ stockRequestId: requestId, action: "DELIVERED", userId: user.id, role: user.role, quantity: inTransitForRound, toLocationId: request.toLocationId ?? undefined, reason: deliveryNote });
   return updated;
 }
 
@@ -230,8 +257,14 @@ export async function confirmReceipt(requestId: string, quantity: number, acting
   if (quantity <= 0) throw new RequestError("Received quantity must be greater than zero");
 
   // No validation, per explicit request — confirming more than was ever delivered is allowed.
-  const material = await prisma.material.findUniqueOrThrow({ where: { id: request.materialId } });
-  await postTransferIn({ materialId: request.materialId, quantity, uom: material.uom, destinationLocationId: request.toLocationId, reference: request.requestNumber, userId: user.id });
+  if (request.purpose === "TRANSFER") {
+    const material = await prisma.material.findUniqueOrThrow({ where: { id: request.materialId } });
+    if (!request.toLocationId) throw new RequestError("Transfer request is missing a destination location");
+    await postTransferIn({ materialId: request.materialId, quantity, uom: material.uom, destinationLocationId: request.toLocationId, reference: request.requestNumber, userId: user.id });
+  }
+  // ISSUE: no ledger call here — the stock already left fromLocationId (as a CONSUMPTION) back
+  // at startDelivery. There is no destination to receive into; this step is purely the
+  // requester's closing acknowledgement of the same quantity/status bookkeeping below.
 
   const newReceived = request.receivedQuantity + quantity;
   const isComplete = newReceived >= request.quantityRequested - 1e-6;
@@ -239,7 +272,7 @@ export async function confirmReceipt(requestId: string, quantity: number, acting
     where: { id: requestId },
     data: { receivedQuantity: newReceived, status: isComplete ? "COMPLETED" : "PARTIALLY_RECEIVED", completedAt: isComplete ? new Date() : undefined },
   });
-  await logEvent({ stockRequestId: requestId, action: isComplete ? "RECEIVED" : "PARTIALLY_RECEIVED", userId: user.id, role: user.role, quantity, toLocationId: request.toLocationId, reason: note });
+  await logEvent({ stockRequestId: requestId, action: isComplete ? "RECEIVED" : "PARTIALLY_RECEIVED", userId: user.id, role: user.role, quantity, toLocationId: request.toLocationId ?? undefined, reason: note });
   if (isComplete) await logEvent({ stockRequestId: requestId, action: "COMPLETED", userId: user.id, role: user.role });
   return updated;
 }

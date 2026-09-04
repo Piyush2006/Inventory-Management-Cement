@@ -38,6 +38,8 @@ import { triggerNotification } from "@/lib/notifications/engine";
 import { checkStockThresholds } from "@/lib/notifications/stockThreshold";
 import type { NotificationEvent } from "@/lib/notifications/events";
 import { answerBruceQuestion } from "@/lib/bruce/answer";
+import { postSpareReturn } from "@/lib/inventory/spareReturn";
+import type { ReturnCondition } from "@/lib/domain/enums";
 
 function fail(message: string) {
   return { ok: false as const, error: message };
@@ -284,12 +286,18 @@ export async function actionCreateStockRequest(formData: FormData) {
     const reason = formData.get("reason") ? String(formData.get("reason")) : undefined;
     const note = formData.get("note") ? String(formData.get("note")) : undefined;
     const fromLocationId = String(formData.get("fromLocationId"));
-    const toLocationId = String(formData.get("toLocationId"));
-    if (!materialId || !fromLocationId || !toLocationId || Number.isNaN(quantityRequested) || quantityRequested <= 0 || isNaN(requiredByDate.getTime())) {
+    const requestType = (String(formData.get("requestType") || "MATERIAL")) as "MATERIAL" | "SPARE";
+    const equipmentRef = formData.get("equipmentRef") ? String(formData.get("equipmentRef")) : undefined;
+    const purpose = (String(formData.get("purpose") || "TRANSFER")) as "TRANSFER" | "ISSUE";
+    const toLocationId = purpose === "TRANSFER" ? String(formData.get("toLocationId")) : undefined;
+    const issuedTo = purpose === "ISSUE" ? String(formData.get("issuedTo") || "") : undefined;
+    if (!materialId || !fromLocationId || Number.isNaN(quantityRequested) || quantityRequested <= 0 || isNaN(requiredByDate.getTime())) {
       return fail("Missing required fields");
     }
+    if (purpose === "TRANSFER" && !toLocationId) return fail("A To location is required for a Transfer request");
+    if (purpose === "ISSUE" && !issuedTo?.trim()) return fail("Issued To is required for an Issue request");
     const user = await getCurrentUser();
-    const request = await createStockRequest({ materialId, quantityRequested, requiredByDate, priority, reason, note, fromLocationId, toLocationId, requestedByUserId: user.id });
+    const request = await createStockRequest({ materialId, quantityRequested, requiredByDate, priority, reason, note, fromLocationId, toLocationId, requestedByUserId: user.id, requestType, equipmentRef, purpose, issuedTo });
     await triggerNotification("REQUEST_CREATED", requestNotificationContext(request));
     revalidateRequestViews();
     return ok();
@@ -432,10 +440,17 @@ export async function actionSaveMaterial(formData: FormData) {
     const safetyStock = formData.get("safetyStock") ? Number(formData.get("safetyStock")) : null;
     const defaultLocationId = formData.get("defaultLocationId") ? String(formData.get("defaultLocationId")) : null;
     const active = formData.get("active") === "on" || formData.get("active") === "true";
+    // Spare Management — meaningful only for category = SPARE, but always read/stored as
+    // submitted (null when blank) rather than gated here, so switching a material's category
+    // never needs special-case handling.
+    const partNumber = formData.get("partNumber") ? String(formData.get("partNumber")) : null;
+    const manufacturer = formData.get("manufacturer") ? String(formData.get("manufacturer")) : null;
+    const equipmentRef = formData.get("equipmentRef") ? String(formData.get("equipmentRef")) : null;
+    const criticality = formData.get("criticality") ? String(formData.get("criticality")) : null;
 
     if (!materialCode || !name || !category || !uom) return fail("Code, name, category, and UOM are required");
 
-    const data = { materialCode, name, category, uom, minStock, safetyStock, defaultLocationId, active };
+    const data = { materialCode, name, category, uom, minStock, safetyStock, defaultLocationId, active, partNumber, manufacturer, equipmentRef, criticality };
     if (id) {
       await prisma.material.update({ where: { id }, data });
     } else {
@@ -855,6 +870,41 @@ export async function actionDeleteNotificationRule(formData: FormData) {
     return ok();
   } catch (e) {
     return fail(e instanceof Error ? e.message : "Failed to delete rule");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Spare Management — a spare return posts through the existing ledger/quality mechanisms
+// (src/lib/inventory/spareReturn.ts). Same STOCK_OPS_ROLES gate as every other recording action.
+// ---------------------------------------------------------------------------
+
+export async function actionPostSpareReturn(formData: FormData) {
+  try {
+    const user = await getCurrentUser();
+    requireRole(user, STOCK_OPS_ROLES);
+    const materialId = String(formData.get("materialId"));
+    const locationId = String(formData.get("locationId"));
+    const quantity = Number(formData.get("quantity"));
+    const condition = String(formData.get("condition")) as ReturnCondition;
+    const returnedBy = String(formData.get("returnedBy") || "");
+    const relatedRequestNumber = formData.get("relatedRequestNumber") ? String(formData.get("relatedRequestNumber")) : undefined;
+    const remarks = formData.get("remarks") ? String(formData.get("remarks")) : undefined;
+    if (!materialId || !locationId || Number.isNaN(quantity) || quantity <= 0 || !condition || !returnedBy.trim()) {
+      return fail("Missing required fields");
+    }
+
+    const material = await prisma.material.findUniqueOrThrow({ where: { id: materialId } });
+    if (material.category !== "SPARE") return fail(`${material.name} is not a spare`);
+    if (!material.active) return fail(`${material.name} is not active`);
+
+    await postSpareReturn({ materialId, locationId, quantity, condition, returnedBy, relatedRequestNumber, remarks, userId: user.id });
+    await checkStockThresholds(materialId);
+    revalidateInventoryViews();
+    revalidatePath("/movements");
+    revalidatePath("/spares");
+    return ok();
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Failed to record spare return");
   }
 }
 

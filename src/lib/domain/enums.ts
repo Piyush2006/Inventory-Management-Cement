@@ -7,8 +7,23 @@ export type LocationType = (typeof LOCATION_TYPES)[number];
 // represent material moved from a request's source but not yet confirmed received.
 export const IN_TRANSIT_LOCATION_TYPE = "IN_TRANSIT";
 
-export const MATERIAL_CATEGORIES = ["RAW_MATERIAL", "FUEL", "ADDITIVE", "INTERMEDIATE", "FINISHED_GOODS", "PACKING"] as const;
+export const MATERIAL_CATEGORIES = ["RAW_MATERIAL", "FUEL", "ADDITIVE", "INTERMEDIATE", "FINISHED_GOODS", "PACKING", "SPARE"] as const;
 export type MaterialCategory = (typeof MATERIAL_CATEGORIES)[number];
+
+// ---------------------------------------------------------------------------
+// Spare Management — a spare is a Material (category = SPARE); a spare request is a
+// StockRequest (requestType = SPARE). See src/lib/inventory/spareReturn.ts.
+// ---------------------------------------------------------------------------
+export const SPARE_CRITICALITIES = ["CRITICAL", "IMPORTANT", "NORMAL"] as const;
+export type SpareCriticality = (typeof SPARE_CRITICALITIES)[number];
+
+export const REQUEST_TYPES = ["MATERIAL", "SPARE"] as const;
+export type RequestType = (typeof REQUEST_TYPES)[number];
+
+// A returned spare's condition maps onto the existing quality statuses — no new state system.
+// UNUSED/SERVICEABLE -> Unrestricted (plain stock-in). FOR_INSPECTION -> QC_HOLD. DAMAGED -> BLOCKED.
+export const RETURN_CONDITIONS = ["UNUSED", "SERVICEABLE", "DAMAGED", "FOR_INSPECTION"] as const;
+export type ReturnCondition = (typeof RETURN_CONDITIONS)[number];
 
 export const TRANSACTION_TYPES = [
   "RECEIPT",
@@ -71,6 +86,12 @@ export const OPEN_REQUEST_STATUSES: RequestStatus[] = ["NEW_REQUEST", "ACCEPTED"
 
 export const REQUEST_PRIORITIES = ["NORMAL", "URGENT"] as const;
 export type RequestPriority = (typeof REQUEST_PRIORITIES)[number];
+
+// Request Purpose — TRANSFER (move stock between two locations, the original behavior) or ISSUE
+// (stock leaves the source for use/consumption; no destination location). Orthogonal to
+// requestType (Material/Spare) above — four combinations, one request mechanism.
+export const REQUEST_PURPOSES = ["TRANSFER", "ISSUE"] as const;
+export type RequestPurpose = (typeof REQUEST_PURPOSES)[number];
 
 export const RESERVATION_STATUSES = ["ACTIVE", "RELEASED"] as const;
 export type ReservationStatus = (typeof RESERVATION_STATUSES)[number];

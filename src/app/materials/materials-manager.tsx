@@ -2,17 +2,22 @@
 
 import { Fragment, useState, useTransition } from "react";
 import { actionSaveMaterial, actionDeactivateMaterial } from "@/app/actions";
-import { MATERIAL_CATEGORIES } from "@/lib/domain/enums";
+import { MATERIAL_CATEGORIES, SPARE_CRITICALITIES } from "@/lib/domain/enums";
 import { formatNumber } from "@/lib/format";
 
 type Material = {
   id: string; materialCode: string; name: string; category: string; uom: string;
   minStock: number | null; safetyStock: number | null; defaultLocationId: string | null;
   active: boolean;
+  partNumber?: string | null; manufacturer?: string | null; equipmentRef?: string | null; criticality?: string | null;
 };
 type Location = { id: string; name: string };
 
 function MaterialFields({ material, locations }: { material?: Material; locations: Location[] }) {
+  // Controlled (not just defaultValue) so the Spare-only fields below can toggle live when the
+  // category changes, both when adding a new material and when editing an existing one.
+  const [category, setCategory] = useState(material?.category ?? MATERIAL_CATEGORIES[0]);
+  const isSpare = category === "SPARE";
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
       <label className="text-xs text-muted">
@@ -25,7 +30,7 @@ function MaterialFields({ material, locations }: { material?: Material; location
       </label>
       <label className="text-xs text-muted">
         Category
-        <select name="category" defaultValue={material?.category ?? MATERIAL_CATEGORIES[0]} required className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
+        <select name="category" value={category} onChange={(e) => setCategory(e.target.value)} required className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
           {MATERIAL_CATEGORIES.map((c) => (
             <option key={c} value={c}>{c.replace("_", " ")}</option>
           ))}
@@ -59,6 +64,30 @@ function MaterialFields({ material, locations }: { material?: Material; location
         <input name="active" type="checkbox" defaultChecked={material?.active ?? true} className="h-4 w-4 rounded border-border" />
         Active
       </label>
+      {isSpare && (
+        <>
+          <label className="text-xs text-muted">
+            Part number
+            <input name="partNumber" defaultValue={material?.partNumber ?? ""} placeholder="e.g. 6205-2RS" className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
+          </label>
+          <label className="text-xs text-muted">
+            Manufacturer
+            <input name="manufacturer" defaultValue={material?.manufacturer ?? ""} placeholder="e.g. SKF" className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
+          </label>
+          <label className="text-xs text-muted">
+            Equipment / Asset
+            <input name="equipmentRef" defaultValue={material?.equipmentRef ?? ""} placeholder="e.g. Conveyor C-102" className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent" />
+          </label>
+          <label className="text-xs text-muted">
+            Criticality
+            <select name="criticality" defaultValue={material?.criticality ?? "NORMAL"} className="mt-1 block w-full rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent">
+              {SPARE_CRITICALITIES.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+        </>
+      )}
     </div>
   );
 }

@@ -18,7 +18,7 @@ export async function RequestReportSection({
   const users = await prisma.user.findMany({ where: { active: true }, orderBy: { name: "asc" } });
 
   const { from, to } = parseDateRangeParams(params.from, params.to);
-  const filters = { from, to, materialId: params.materialId, status: params.status, reference: params.reference, userId: params.userId };
+  const filters = { from, to, materialId: params.materialId, status: params.status, reference: params.reference, userId: params.userId, purpose: params.purpose };
   // Store Operator only ever sees its own assigned requests anywhere else in the app
   // (requests/page.tsx's Open/History tabs are scoped to assignedToUserId, not just actions) —
   // Reports mirrors that, not a wider default. Indentor (Requester) is scoped the same way to
@@ -33,7 +33,7 @@ export async function RequestReportSection({
     <div className="space-y-4">
       <ReportFilterBar
         tab="request"
-        fields={["dateRange", "material", "status", "reference", "user"]}
+        fields={["dateRange", "material", "purpose", "status", "reference", "user"]}
         params={params}
         materials={materials.map((m) => ({ value: m.id, label: m.name }))}
         locations={[]}
@@ -46,9 +46,9 @@ export async function RequestReportSection({
         action={
           <ExportCsvButton
             filename="request-report.csv"
-            headers={["Request ID", "Material", "Requested Qty", "Delivered Qty", "Received Qty", "Remaining Qty", "Status", "Requested By", "Assigned To", "Requested Date", "Accepted Date", "Assigned Date", "In Transit Date", "Delivered Date", "Completed Date"]}
+            headers={["Request ID", "Material", "Purpose", "Requested Qty", "Delivered Qty", "Received Qty", "Remaining Qty", "Status", "Requested By", "Assigned To", "Requested Date", "Accepted Date", "Assigned Date", "In Transit Date", "Delivered Date", "Completed Date"]}
             rows={report.rows.map((r) => [
-              r.requestNumber, r.materialName, formatNumber(r.quantityRequested), formatNumber(r.deliveredQuantity), formatNumber(r.receivedQuantity), formatNumber(r.remainingQuantity),
+              r.requestNumber, r.materialName, r.purpose === "ISSUE" ? "Issue" : "Transfer", formatNumber(r.quantityRequested), formatNumber(r.deliveredQuantity), formatNumber(r.receivedQuantity), formatNumber(r.remainingQuantity),
               r.status, r.requestedByName, r.assignedToName ?? "",
               formatDate(r.requestedAt), r.acceptedAt ? formatDate(r.acceptedAt) : "", r.assignedAt ? formatDate(r.assignedAt) : "",
               r.inTransitAt ? formatDate(r.inTransitAt) : "", r.deliveredAt ? formatDate(r.deliveredAt) : "", r.completedAt ? formatDate(r.completedAt) : "",
@@ -65,6 +65,7 @@ export async function RequestReportSection({
                 <tr className="border-b border-border-soft">
                   <Th>Request ID</Th>
                   <Th>Material</Th>
+                  <Th>Purpose</Th>
                   <Th className="text-right">Requested</Th>
                   <Th className="text-right">Delivered</Th>
                   <Th className="text-right">Received</Th>
@@ -85,6 +86,7 @@ export async function RequestReportSection({
                   <tr key={r.id} className="border-b border-border-soft last:border-0">
                     <Td className="text-xs text-muted-soft">{r.requestNumber}</Td>
                     <Td>{r.materialName}</Td>
+                    <Td className="text-xs text-muted">{r.purpose === "ISSUE" ? "Issue" : "Transfer"}</Td>
                     <Td className="text-right tabular">{formatNumber(r.quantityRequested)} {r.uom}</Td>
                     <Td className="text-right tabular">{formatNumber(r.deliveredQuantity)} {r.uom}</Td>
                     <Td className="text-right tabular">{formatNumber(r.receivedQuantity)} {r.uom}</Td>

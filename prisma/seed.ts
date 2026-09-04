@@ -19,6 +19,7 @@ import { createDispatch, approveDispatch, startDispatchLoading, markDispatched, 
 import { NOTIFICATION_EVENT_META } from "../src/lib/notifications/events";
 import { triggerNotification } from "../src/lib/notifications/engine";
 import { checkStockThresholds } from "../src/lib/notifications/stockThreshold";
+import { postSpareReturn } from "../src/lib/inventory/spareReturn";
 
 async function main() {
   await ensureSqliteTuned();
@@ -61,6 +62,7 @@ async function main() {
   const packingArea = await loc("Packing Area", "WAREHOUSE");
   const baggedWarehouse = await loc("Bagged Warehouse", "WAREHOUSE");
   const maintenanceStore = await loc("Maintenance Store", "STORE");
+  const engineeringStore = await loc("Engineering Store", "STORE"); // Spare Management's home location
   const cementMill1 = await loc("Cement Mill 1", "PRODUCTION_AREA");
   const kiln = await loc("Kiln", "PRODUCTION_AREA");
 
@@ -73,11 +75,16 @@ async function main() {
   await prisma.user.create({ data: { name: "Admin", role: "ADMIN" } });
 
   console.log("Creating materials...");
-  async function mat(input: { code: string; name: string; category: string; uom: string; minStock?: number; safetyStock?: number; defaultLocationId?: string }) {
+  async function mat(input: {
+    code: string; name: string; category: string; uom: string; minStock?: number; safetyStock?: number; defaultLocationId?: string;
+    // Spare Management — meaningful only for category = SPARE.
+    partNumber?: string; manufacturer?: string; equipmentRef?: string; criticality?: string;
+  }) {
     return prisma.material.create({
       data: {
         materialCode: input.code, name: input.name, category: input.category, uom: input.uom,
         minStock: input.minStock, safetyStock: input.safetyStock, defaultLocationId: input.defaultLocationId,
+        partNumber: input.partNumber, manufacturer: input.manufacturer, equipmentRef: input.equipmentRef, criticality: input.criticality,
       },
     });
   }
@@ -97,6 +104,14 @@ async function main() {
   const cementHe = await mat({ code: "FG-CHE", name: "Cement HE", category: "FINISHED_GOODS", uom: "MT", minStock: 600, safetyStock: 200, defaultLocationId: cementSilo3.id });
   const cementBag = await mat({ code: "PK-BAG", name: "20 kg Cement Bag", category: "PACKING", uom: "Nos", minStock: 20000, safetyStock: 10000, defaultLocationId: packingArea.id });
 
+  console.log("Creating spares — a spare IS a Material (category = SPARE), not a separate entity...");
+  const bearing = await mat({ code: "BRG-6205", name: "Ball Bearing 6205-2RS (SKF)", category: "SPARE", uom: "Nos", minStock: 4, safetyStock: 2, defaultLocationId: engineeringStore.id, partNumber: "6205-2RS", manufacturer: "SKF", equipmentRef: "Conveyor C-102", criticality: "IMPORTANT" });
+  const idlerRoller = await mat({ code: "IDL-089", name: "Conveyor Idler Roller", category: "SPARE", uom: "Nos", minStock: 10, safetyStock: 6, defaultLocationId: engineeringStore.id, partNumber: "IDL-089", manufacturer: "Metso", equipmentRef: "Conveyor C-102", criticality: "NORMAL" });
+  const filterBag = await mat({ code: "FLT-BAG", name: "Baghouse Filter Bag", category: "SPARE", uom: "Nos", minStock: 200, safetyStock: 120, defaultLocationId: engineeringStore.id, partNumber: "FLT-BAG", manufacturer: "Donaldson", equipmentRef: "Baghouse BH-1", criticality: "IMPORTANT" });
+  const burnerTip = await mat({ code: "BRN-TIP", name: "Kiln Burner Tip", category: "SPARE", uom: "Nos", minStock: 1, safetyStock: 1, defaultLocationId: engineeringStore.id, partNumber: "BRN-TIP", manufacturer: "FLSmidth", equipmentRef: "Kiln 6", criticality: "CRITICAL" });
+  const gearboxOil = await mat({ code: "GBX-OIL", name: "Gearbox Oil ISO VG320", category: "SPARE", uom: "MT", minStock: 2, safetyStock: 1, defaultLocationId: engineeringStore.id, partNumber: "GBX-OIL", manufacturer: "Shell", equipmentRef: "Mill Gearboxes", criticality: "NORMAL" });
+  const girthGearBolt = await mat({ code: "GGB-M42", name: "Girth Gear Bolt M42", category: "SPARE", uom: "Nos", minStock: 24, safetyStock: 12, defaultLocationId: engineeringStore.id, partNumber: "GGB-M42", manufacturer: "Unbrako", equipmentRef: "Kiln 6 Girth Gear", criticality: "IMPORTANT" });
+
   console.log("Posting opening balances — dated ~25 days ago (plant baseline), well before the 14-day trend charts' window...");
   const openingBalanceDate = new Date(Date.now() - 25 * 86400000);
   async function opening(materialId: string, locationId: string, quantity: number) {
@@ -115,6 +130,19 @@ async function main() {
   await opening(sand.id, maintenanceStore.id, 300);
   await opening(flyAsh.id, maintenanceStore.id, 150);
   await opening(slag.id, maintenanceStore.id, 200);
+
+  console.log("Posting spare opening balances at Engineering Store — chosen so the post-history net matches §9's worked 'seeded available' figures exactly...");
+  async function sparOpening(materialId: string, quantity: number) {
+    await postMovement({ materialId, transactionType: "OPENING_BALANCE", quantity, uom: "Nos", locationId: engineeringStore.id, reference: "Initial Inventory", timestamp: openingBalanceDate });
+  }
+  await sparOpening(bearing.id, 5); // + GRN(3) - issued(2) + returned(1) => 7 on hand, 1 Blocked => 6 Unrestricted (matches spec)
+  await sparOpening(idlerRoller.id, 16); // - issued(2) => 14 (matches spec exactly)
+  await postMovement({ materialId: filterBag.id, transactionType: "OPENING_BALANCE", quantity: 120, uom: "Nos", locationId: engineeringStore.id, reference: "Initial Inventory", timestamp: openingBalanceDate }); // + GRN(30) => 150, deliberately below min (200) but above safety (120) -> LOW per classifyStockStatus (the spec's own "90 (LOW)" figure would actually classify CRITICAL under this app's real safety-stock-first logic, so the quantity is adjusted to genuinely land LOW rather than mislabel a CRITICAL shortage)
+  // Kiln Burner Tip (burnerTip) deliberately gets NO opening balance — 0 on hand is the natural
+  // result of no InventoryBalance row, matching how other never-opened materials in this file
+  // already behave. This is the live CRITICAL shortage the spec's §9 explicitly wants visible.
+  await postMovement({ materialId: gearboxOil.id, transactionType: "OPENING_BALANCE", quantity: 5, uom: "MT", locationId: engineeringStore.id, reference: "Initial Inventory", timestamp: openingBalanceDate }); // - issued(1.5) => 3.5 (matches spec exactly)
+  await postMovement({ materialId: girthGearBolt.id, transactionType: "OPENING_BALANCE", quantity: 44, uom: "Nos", locationId: engineeringStore.id, reference: "Initial Inventory", timestamp: openingBalanceDate }); // - issued(4) => 40 (matches spec exactly)
 
   console.log("Recording standalone Stock Operations (Consume / Transfer)...");
   await postTransfer({ materialId: clinker.id, quantity: 200, uom: "MT", sourceLocationId: clinkerStore.id, destinationLocationId: cementMill1.id, reference: "Cement Mill 1 topping-up" });
@@ -329,6 +357,62 @@ async function main() {
     supplierId: flyAshTraders.id, purchaseReferenceId: flyAshPo.id, materialId: flyAsh.id, receiptDate: new Date(),
     receivedQuantity: 200, acceptedQuantity: 200, destinationLocationId: maintenanceStore.id, invoiceNumber: "INV-5510",
   }); // also left as DRAFT — a second example awaiting posting
+
+  console.log("Seeding Spare Management's own GRN receipts, request issues, and the one full issue-then-damaged-return story...");
+  const skfDistribution = await resolveSupplier({ name: "SKF Bearings Distribution" });
+  await createAndPostMaterialReceipt({
+    supplierId: skfDistribution.id, materialId: bearing.id, receiptDate: new Date(Date.now() - 12 * 86400000),
+    receivedQuantity: 3, acceptedQuantity: 3, destinationLocationId: engineeringStore.id, invoiceNumber: "INV-6205-A",
+  });
+  const donaldsonFiltration = await resolveSupplier({ name: "Donaldson Filtration" });
+  await createAndPostMaterialReceipt({
+    supplierId: donaldsonFiltration.id, materialId: filterBag.id, receiptDate: new Date(Date.now() - 10 * 86400000),
+    receivedQuantity: 30, acceptedQuantity: 30, destinationLocationId: engineeringStore.id, invoiceNumber: "INV-FLT-014",
+  });
+
+  // Several completed spare-request issues — varied requesters/equipment/reasons, all through the
+  // exact same request lifecycle a material request uses (requestType: "SPARE" is the only difference).
+  const spareIssue1 = await createStockRequest({ materialId: idlerRoller.id, quantityRequested: 2, requiredByDate: new Date(Date.now() + 3 * 86400000), fromLocationId: engineeringStore.id, toLocationId: cementMill1.id, reason: "Scheduled idler roller replacement", requestedByUserId: priya.id, requestType: "SPARE", equipmentRef: "Conveyor C-102" });
+  await acceptStockRequest(spareIssue1.id, neha.id);
+  await routeToSupervisor(spareIssue1.id, amit.id, neha.id);
+  await assignOperator(spareIssue1.id, suresh.id, amit.id);
+  await startDelivery(spareIssue1.id, suresh.id);
+  await markDelivered(spareIssue1.id, suresh.id, "Delivered to Conveyor C-102 maintenance crew");
+  await confirmReceipt(spareIssue1.id, 2, priya.id);
+
+  const spareIssue2 = await createStockRequest({ materialId: gearboxOil.id, quantityRequested: 1.5, requiredByDate: new Date(Date.now() + 2 * 86400000), fromLocationId: engineeringStore.id, toLocationId: cementMill1.id, reason: "Gearbox oil top-up during preventive maintenance", requestedByUserId: rahul.id, requestType: "SPARE", equipmentRef: "Mill Gearboxes" });
+  await acceptStockRequest(spareIssue2.id, neha.id);
+  await routeToSupervisor(spareIssue2.id, amit.id, neha.id);
+  await assignOperator(spareIssue2.id, suresh.id, amit.id);
+  await startDelivery(spareIssue2.id, suresh.id);
+  await markDelivered(spareIssue2.id, suresh.id);
+  await confirmReceipt(spareIssue2.id, 1.5, rahul.id);
+
+  const spareIssue3 = await createStockRequest({ materialId: girthGearBolt.id, quantityRequested: 4, requiredByDate: new Date(Date.now() + 4 * 86400000), fromLocationId: engineeringStore.id, toLocationId: kiln.id, reason: "Girth gear bolt replacement — routine inspection finding", requestedByUserId: priya.id, requestType: "SPARE", equipmentRef: "Kiln 6 Girth Gear" });
+  await acceptStockRequest(spareIssue3.id, neha.id);
+  await routeToSupervisor(spareIssue3.id, amit.id, neha.id);
+  await assignOperator(spareIssue3.id, suresh.id, amit.id);
+  await startDelivery(spareIssue3.id, suresh.id);
+  await markDelivered(spareIssue3.id, suresh.id);
+  await confirmReceipt(spareIssue3.id, 4, priya.id);
+
+  // The one complete demo story per §9: Breakdown -> issue -> confirm -> partial DAMAGED return,
+  // sitting in Blocked with the full audit trail visible on the request detail and quality panel.
+  const bearingDemoRequest = await createStockRequest({ materialId: bearing.id, quantityRequested: 2, requiredByDate: new Date(Date.now() + 1 * 86400000), priority: "URGENT", fromLocationId: engineeringStore.id, toLocationId: maintenanceStore.id, reason: "Breakdown", requestedByUserId: rahul.id, requestType: "SPARE", equipmentRef: "Conveyor C-102" });
+  await acceptStockRequest(bearingDemoRequest.id, neha.id);
+  await routeToSupervisor(bearingDemoRequest.id, amit.id, neha.id);
+  await assignOperator(bearingDemoRequest.id, suresh.id, amit.id);
+  await startDelivery(bearingDemoRequest.id, suresh.id);
+  await markDelivered(bearingDemoRequest.id, suresh.id, "Delivered to Conveyor C-102 breakdown crew");
+  await confirmReceipt(bearingDemoRequest.id, 2, rahul.id);
+  await postSpareReturn({
+    materialId: bearing.id, locationId: engineeringStore.id, quantity: 1, condition: "DAMAGED",
+    returnedBy: "Suresh", relatedRequestNumber: bearingDemoRequest.requestNumber,
+    remarks: "Bearing found damaged during installation — race visibly cracked", userId: suresh.id,
+  });
+
+  // One spare request left NEW_REQUEST — a live actionable item in the Inventory Manager's queue.
+  await createStockRequest({ materialId: filterBag.id, quantityRequested: 50, requiredByDate: new Date(Date.now() + 5 * 86400000), fromLocationId: engineeringStore.id, toLocationId: maintenanceStore.id, reason: "Planned baghouse shutdown — filter bag replacement", requestedByUserId: priya.id, requestType: "SPARE", equipmentRef: "Baghouse BH-1" });
 
   console.log("Building consumption history across the catalog — Days of Cover, Consumption History, and the dashboard trend charts all read this...");
   async function consumptionHistory(materialId: string, locationId: string, uom: string, processName: string, opts: { days?: number; dailyRatePct?: number } = {}) {

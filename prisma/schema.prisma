@@ -44,7 +44,7 @@ model Material {
   id                String   @id @default(cuid())
   materialCode      String   @unique
   name              String
-  category          String // RAW_MATERIAL | FUEL | ADDITIVE | INTERMEDIATE | FINISHED_GOODS | PACKING
+  category          String // RAW_MATERIAL | FUEL | ADDITIVE | INTERMEDIATE | FINISHED_GOODS | PACKING | SPARE
   uom               String // material-specific, e.g. MT | Nos
   minStock          Float?
   safetyStock       Float?
@@ -55,6 +55,13 @@ model Material {
   active            Boolean  @default(true)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+
+  // Spare Management — meaningful only when category = SPARE (a spare IS a Material, not a
+  // separate entity). All nullable/free-text; no vendor/procurement/asset-hierarchy module.
+  partNumber   String?
+  manufacturer String?
+  equipmentRef String? // free text, e.g. "Conveyor C-102" — informational only
+  criticality  String? // CRITICAL | IMPORTANT | NORMAL
 
   defaultLocation Location? @relation("MaterialDefaultLocation", fields: [defaultLocationId], references: [id])
 
@@ -229,7 +236,22 @@ model StockRequest {
   reason            String? // why the material is needed
   note              String?
   fromLocationId    String
-  toLocationId      String
+  // Nullable — an ISSUE-purpose request has no destination inventory location at all (see
+  // `purpose` below); only a TRANSFER-purpose request populates this.
+  toLocationId      String?
+
+  // Spare Management — a spare request IS a StockRequest, distinguished only by this
+  // discriminator; no new statuses/lifecycle/entity. equipmentRef is free text captured at
+  // request time (prefilled from the spare Material's own equipmentRef, but editable) —
+  // distinct from Material.equipmentRef, which is just the master-data default.
+  requestType  String  @default("MATERIAL") // MATERIAL | SPARE
+  equipmentRef String?
+
+  // Request Purpose — TRANSFER (move stock between two locations, the original/default
+  // behavior) or ISSUE (stock leaves the source for use/consumption, no destination location).
+  // issuedTo is ISSUE's free-text equivalent of toLocationId ("who/what it went to").
+  purpose  String  @default("TRANSFER") // TRANSFER | ISSUE
+  issuedTo String?
 
   requestedByUserId String
   requestedByRole   String
@@ -262,9 +284,9 @@ model StockRequest {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  material     Material @relation(fields: [materialId], references: [id])
-  fromLocation Location @relation("RequestFromLocation", fields: [fromLocationId], references: [id])
-  toLocation   Location @relation("RequestToLocation", fields: [toLocationId], references: [id])
+  material     Material  @relation(fields: [materialId], references: [id])
+  fromLocation Location  @relation("RequestFromLocation", fields: [fromLocationId], references: [id])
+  toLocation   Location? @relation("RequestToLocation", fields: [toLocationId], references: [id])
   requestedBy  User     @relation("RequestedBy", fields: [requestedByUserId], references: [id])
   acceptedBy   User?    @relation("AcceptedBy", fields: [acceptedByUserId], references: [id])
   rejectedBy   User?    @relation("RejectedBy", fields: [rejectedByUserId], references: [id])

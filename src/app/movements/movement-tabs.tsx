@@ -6,6 +6,7 @@ import { CountAdjustForm } from "./count-adjust-form";
 import { ReceiveMaterialPanel } from "./receive-material-panel";
 import { DispatchPanel } from "./dispatch-panel";
 import { PendingCountsPanel } from "./pending-counts-panel";
+import { SpareReturnForm } from "./spare-return-form";
 import { Th, Td, EmptyState } from "@/components/ui";
 import { formatNumber, formatDateTime } from "@/lib/format";
 import type { TransactionType } from "@/lib/domain/enums";
@@ -30,12 +31,14 @@ type PendingCount = {
   id: string; materialName: string; uom: string; locationName: string; bookQuantity: number;
   countedQuantity: number; tolerancePct: number; countedBy: string; note: string | null;
 };
+type SpareRequestOption = { id: string; requestNumber: string; materialId: string; issued: number; alreadyReturned: number };
 
-const TABS: { key: TransactionType | "RECEIVE" | "ADJUSTMENT" | "DISPATCH"; label: string }[] = [
+const TABS: { key: TransactionType | "RECEIVE" | "ADJUSTMENT" | "DISPATCH" | "SPARE_RETURN"; label: string }[] = [
   { key: "RECEIVE", label: "Receive Material" },
   ...LEDGER_MOVEMENT_TYPES.map((t) => ({ key: t.type, label: t.label })),
   { key: "ADJUSTMENT", label: "Adjustment" },
   { key: "DISPATCH", label: "Dispatch" },
+  { key: "SPARE_RETURN", label: "Spare Return" },
 ];
 
 // Each tab owns its own history — no list mixes movements from a different tab's transaction type.
@@ -86,6 +89,8 @@ export function MovementTabs({
   adjustmentMovements,
   pendingCounts,
   canApprove,
+  spareMaterials,
+  spareRequests,
 }: {
   materials: Material[];
   locations: Location[];
@@ -101,6 +106,8 @@ export function MovementTabs({
   adjustmentMovements: MovementRow[];
   pendingCounts: PendingCount[];
   canApprove: boolean;
+  spareMaterials: Material[];
+  spareRequests: SpareRequestOption[];
 }) {
   // Store Supervisor reaches this page now solely for Dispatch — the other tabs stay hidden for
   // anyone canRecord doesn't cover, same as before this feature existed.
@@ -142,6 +149,8 @@ export function MovementTabs({
         </div>
       ) : tab === "DISPATCH" ? (
         <DispatchPanel dispatches={dispatches} materials={materials} locations={locations} balances={balances} canCreate={canCreateDispatch} />
+      ) : tab === "SPARE_RETURN" ? (
+        <SpareReturnForm materials={spareMaterials} locations={locations} requests={spareRequests} />
       ) : (
         <div key={tab} className="space-y-6">
           <MovementForm type={tab} materials={materials} locations={locations} />

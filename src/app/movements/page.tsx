@@ -33,8 +33,11 @@ function recentByType(transactionType: string) {
 export default async function StockOperationsPage() {
   // Every query here excludes the virtual in-transit location — it's not a real place to
   // receive/consume/transfer/count against; it only exists to model a request's delivery.
-  const [materials, locations, balances, qualityBalances, consumptionMovements, transferMovements, adjustmentMovements, receipts, suppliers, currentUser] = await Promise.all([
+  const [materials, spareMaterials, locations, balances, qualityBalances, consumptionMovements, transferMovements, adjustmentMovements, receipts, suppliers, currentUser] = await Promise.all([
+    // Includes spares — Receive/Consume/Transfer/Adjustment/Dispatch are generic to any material.
+    // spareMaterials below is the SPARE-only subset the new Spare Return tab needs.
     prisma.material.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
+    prisma.material.findMany({ where: { active: true, category: "SPARE" }, orderBy: { name: "asc" } }),
     prisma.location.findMany({ where: { active: true, type: { not: IN_TRANSIT_LOCATION_TYPE } }, orderBy: { name: "asc" } }),
     prisma.inventoryBalance.findMany({ where: { quantity: { gt: 1e-6 }, location: { type: { not: IN_TRANSIT_LOCATION_TYPE } } }, include: { material: true, location: true } }),
     // Batched, avoids an N+1 getUnrestrictedAvailable() call per (material, location) row —
@@ -138,6 +141,29 @@ export default async function StockOperationsPage() {
     createdAt: d.createdAt,
   }));
 
+  // Spare Return tab: recent SPARE-type requests, with what's on record as issued
+  // (deliveredQuantity) and already returned (batched sum of prior return RECEIPT rows
+  // keyed by reference), for the client-side over-return warn-and-confirm check.
+  const spareRequests = canRecord
+    ? await prisma.stockRequest.findMany({ where: { requestType: "SPARE" }, orderBy: { createdAt: "desc" }, take: 50 })
+    : [];
+  const returnedByRequestNumber = new Map<string, number>();
+  if (spareRequests.length > 0) {
+    const returnRows = await prisma.inventoryTransaction.groupBy({
+      by: ["reference"],
+      where: { transactionType: "RECEIPT", reference: { in: spareRequests.map((r) => r.requestNumber) }, reason: { contains: "Returned by" } },
+      _sum: { quantity: true },
+    });
+    for (const r of returnRows) if (r.reference) returnedByRequestNumber.set(r.reference, r._sum.quantity ?? 0);
+  }
+  const spareRequestOptions = spareRequests.map((r) => ({
+    id: r.id,
+    requestNumber: r.requestNumber,
+    materialId: r.materialId,
+    issued: r.deliveredQuantity,
+    alreadyReturned: returnedByRequestNumber.get(r.requestNumber) ?? 0,
+  }));
+
   return (
     <div className="space-y-6">
       <div>
@@ -173,6 +199,8 @@ export default async function StockOperationsPage() {
                 note: c.note,
               }))}
               canApprove={canApprove}
+              spareMaterials={spareMaterials.map((m) => ({ id: m.id, name: m.name, uom: m.uom }))}
+              spareRequests={spareRequestOptions}
             />
           </Suspense>
         ) : (
