@@ -167,9 +167,12 @@ async function main() {
   await opening(altFuel.id, altFuelBunker.id, 80); // deliberately below safety stock -> CRITICAL
   await opening(gypsum.id, gypsumStore.id, 3000);
   await opening(clinker.id, clinkerStore.id, 4000);
-  await opening(cementGp.id, cementSilo1.id, 2200);
-  await opening(cementGb.id, cementSilo2.id, 1500);
-  await opening(cementHe.id, cementSilo3.id, 529); // below min, above safety -> LOW, matches the spec's own worked example
+  // Deliberately tiered (high / medium / low fill) so the Dashboard's Silo Quick View
+  // demonstrates visibly different book levels across the three cement silos, per spec — each
+  // stays under its own material's maxStock so this doesn't also trip the unrelated Overstock flag.
+  await opening(cementGp.id, cementSilo1.id, 2900); // Silo 1 — high (~58% of its 5,000 MT capacity)
+  await opening(cementGb.id, cementSilo2.id, 1600); // Silo 2 — medium (~32% of its 5,000 MT capacity)
+  await opening(cementHe.id, cementSilo3.id, 529); // Silo 3 — low (~26% of its 2,000 MT capacity), also below min -> CRITICAL (classifyStockStatus has only HEALTHY/CRITICAL, no separate safety-stock tier)
   await postMovement({ materialId: cementBag.id, transactionType: "OPENING_BALANCE", quantity: 50000, uom: "Nos", locationId: packingArea.id, reference: "Initial Inventory", timestamp: openingBalanceDate });
   await opening(ironCorrective.id, maintenanceStore.id, 500);
   await opening(sand.id, maintenanceStore.id, 300);
@@ -182,7 +185,7 @@ async function main() {
   }
   await sparOpening(bearing.id, 5); // + GRN(3) - issued(2) + returned(1) => 7 on hand, 1 Blocked => 6 Unrestricted (matches spec)
   await sparOpening(idlerRoller.id, 16); // - issued(2) => 14 (matches spec exactly)
-  await postMovement({ materialId: filterBag.id, transactionType: "OPENING_BALANCE", quantity: 120, uom: "Nos", locationId: engineeringStore.id, reference: "Initial Inventory", timestamp: openingBalanceDate }); // + GRN(30) => 150, deliberately below min (200) but above safety (120) -> LOW per classifyStockStatus (the spec's own "90 (LOW)" figure would actually classify CRITICAL under this app's real safety-stock-first logic, so the quantity is adjusted to genuinely land LOW rather than mislabel a CRITICAL shortage)
+  await postMovement({ materialId: filterBag.id, transactionType: "OPENING_BALANCE", quantity: 120, uom: "Nos", locationId: engineeringStore.id, reference: "Initial Inventory", timestamp: openingBalanceDate }); // + GRN(30) => 150, below min (200) -> CRITICAL
   // Kiln Burner Tip (burnerTip) deliberately gets NO opening balance — 0 on hand is the natural
   // result of no InventoryBalance row, matching how other never-opened materials in this file
   // already behave. This is the live CRITICAL shortage the spec's §9 explicitly wants visible.
@@ -585,7 +588,7 @@ async function main() {
   await triggerNotification("DISPATCH_APPROVED", dispatchNotifyCtx(freshDisB)); // assigned to Suresh
   await triggerNotification("QUALITY_RELEASED", { recordId: sand.id, materialId: sand.id, locationId: maintenanceStore.id, quantity: 25, link: `/inventory/${sand.id}` }); // the hold-then-release cycle seeded above
   await checkStockThresholds(altFuel.id); // already seeded critically low -> fires STOCK_CRITICAL to Neha
-  await checkStockThresholds(cementHe.id); // already seeded below minimum -> fires STOCK_LOW to Neha
+  await checkStockThresholds(cementHe.id); // already seeded below minimum -> fires STOCK_CRITICAL to Neha
 
   console.log("Seed complete.");
 }

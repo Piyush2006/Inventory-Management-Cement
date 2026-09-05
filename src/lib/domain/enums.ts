@@ -50,7 +50,7 @@ export type TransactionType = (typeof TRANSACTION_TYPES)[number];
 export const OUTBOUND_TX_TYPES: TransactionType[] = ["CONSUMPTION", "DISPATCH"];
 export const INBOUND_TX_TYPES: TransactionType[] = ["RECEIPT", "OPENING_BALANCE"];
 
-export const STOCK_STATUSES = ["HEALTHY", "LOW", "CRITICAL"] as const;
+export const STOCK_STATUSES = ["HEALTHY", "CRITICAL"] as const;
 export type StockStatus = (typeof STOCK_STATUSES)[number];
 
 // Quality Hold / Release. UNRESTRICTED is never stored as a QualityBalance row (it's derived

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { classifyStockStatus } from "@/lib/inventory/status";
-import { Panel, Th, Td, EmptyState, ViewIcon } from "@/components/ui";
+import { Panel, Th, Td, EmptyState, ViewIcon, OverstockBadge } from "@/components/ui";
 import { StatusBadge } from "@/components/status-badge";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { formatNumber } from "@/lib/format";
@@ -173,7 +173,14 @@ export default async function InventoryPage({
                         </div>
                       )}
                     </Td>
-                    <Td className="text-right tabular">{formatNumber(r.currentStock)} {r.material.uom}</Td>
+                    <Td className="text-right tabular">
+                      <span className={r.overstock ? "text-[var(--status-excess)]" : undefined}>{formatNumber(r.currentStock)} {r.material.uom}</span>
+                      {r.overstock && (
+                        <div className="mt-1 flex justify-end">
+                          <OverstockBadge />
+                        </div>
+                      )}
+                    </Td>
                     <Td className="text-right tabular text-muted">{r.material.minStock != null ? formatNumber(r.material.minStock) : "—"}</Td>
                     <Td className="text-right tabular text-muted">{r.material.maxStock != null ? formatNumber(r.material.maxStock) : "—"}</Td>
                     <Td>

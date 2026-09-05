@@ -7,7 +7,7 @@ import { computeDaysOfSupply } from "@/lib/inventory/daysOfSupply";
 // catalog function elsewhere — same batched shape dashboard.ts/inventory/page.tsx already use
 // (active materials + balances + quality balances in one pass), not a new data model.
 
-export async function getMaterialsByStatus(status: "LOW" | "CRITICAL") {
+export async function getMaterialsByStatus(status: "CRITICAL") {
   const materials = await prisma.material.findMany({
     where: { active: true },
     include: { balances: { where: { location: { type: { not: IN_TRANSIT_LOCATION_TYPE } } } } },

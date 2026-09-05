@@ -33,7 +33,9 @@ function recentByType(transactionType: string) {
   });
 }
 
-export default async function StockOperationsPage() {
+export default async function StockOperationsPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
+  const params = await searchParams;
+  const initialTab = params.tab as "RECEIVE" | "ADJUSTMENT" | "DISPATCH" | "SPARE_RETURN" | undefined;
   // Every query here excludes the virtual in-transit location — it's not a real place to
   // receive/count against; it only exists to model a request's delivery.
   const [materials, spareMaterials, locations, balances, qualityBalances, adjustmentMovements, receipts, suppliers, currentUser] = await Promise.all([
@@ -249,6 +251,7 @@ export default async function StockOperationsPage() {
               spareMaterials={spareMaterials.map((m) => ({ id: m.id, name: m.name, uom: m.uom }))}
               spareRequests={spareRequestOptions}
               spareReturns={spareReturnRows}
+              initialTab={initialTab}
             />
           </Suspense>
         ) : (

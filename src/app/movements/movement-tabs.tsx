@@ -97,6 +97,7 @@ export function MovementTabs({
   spareMaterials,
   spareRequests,
   spareReturns,
+  initialTab,
 }: {
   materials: Material[];
   locations: Location[];
@@ -116,6 +117,9 @@ export function MovementTabs({
   spareMaterials: Material[];
   spareRequests: SpareRequestOption[];
   spareReturns: SpareReturnRow[];
+  // Lets an external link (the Dashboard's "Your Actions" queue) land directly on the tab its
+  // action lives on, e.g. /movements?tab=ADJUSTMENT — purely a UI preselection, no new logic.
+  initialTab?: (typeof TABS)[number]["key"];
 }) {
   // Store Supervisor reaches this page now solely for Dispatch, plus the Adjustment tab's
   // physical-count step and read-only Spare Return monitoring — Receive Material stays hidden
@@ -123,7 +127,9 @@ export function MovementTabs({
   const visibleTabs = TABS.filter((t) =>
     t.key === "DISPATCH" ? canAccessDispatch : t.key === "ADJUSTMENT" ? canRecordAdjustment : t.key === "SPARE_RETURN" ? canViewSpareReturns : canRecord
   );
-  const [tab, setTab] = useState<(typeof TABS)[number]["key"]>(visibleTabs[0]?.key ?? "DISPATCH");
+  const [tab, setTab] = useState<(typeof TABS)[number]["key"]>(
+    initialTab && visibleTabs.some((t) => t.key === initialTab) ? initialTab : visibleTabs[0]?.key ?? "DISPATCH"
+  );
   const [formOpen, setFormOpen] = useState(false);
 
   return (

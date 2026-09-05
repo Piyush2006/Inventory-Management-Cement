@@ -2,7 +2,6 @@ import type { RequestStatus, StockStatus } from "@/lib/domain/enums";
 
 const STOCK_STYLES: Record<StockStatus, { label: string; fg: string; bg: string; dot: string }> = {
   HEALTHY: { label: "Healthy", fg: "text-[var(--status-healthy)]", bg: "bg-[var(--status-healthy-bg)]", dot: "bg-[var(--status-healthy)]" },
-  LOW: { label: "Low", fg: "text-[var(--status-warning)]", bg: "bg-[var(--status-warning-bg)]", dot: "bg-[var(--status-warning)]" },
   CRITICAL: { label: "Critical", fg: "text-[var(--status-critical)]", bg: "bg-[var(--status-critical-bg)]", dot: "bg-[var(--status-critical)]" },
 };
 

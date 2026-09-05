@@ -3,12 +3,12 @@ import { getTotalUnrestrictedAvailable } from "@/lib/inventory/quality";
 import { classifyStockStatus } from "@/lib/inventory/status";
 import { triggerNotification } from "./engine";
 
-const SEVERITY: Record<string, number> = { HEALTHY: 0, LOW: 1, CRITICAL: 2 };
+const SEVERITY: Record<string, number> = { HEALTHY: 0, CRITICAL: 1 };
 
 /**
- * Fires STOCK_LOW / STOCK_CRITICAL only on a WORSENING transition (HEALTHY->LOW, HEALTHY->
- * CRITICAL, LOW->CRITICAL), not on every balance-changing action while a material is already at
- * that level — MaterialAlertState.lastStatus is the transition memory. Call after any action
+ * Fires STOCK_CRITICAL only on a WORSENING transition (HEALTHY->CRITICAL), not on every
+ * balance-changing action while a material is already CRITICAL — MaterialAlertState.lastStatus
+ * is the transition memory. Call after any action
  * that can move a material's network-wide unrestricted total (Consume/Transfer/Adjustment/GRN
  * post/Dispatch/Request delivery legs). Same single-material classifyStockStatus +
  * getTotalUnrestrictedAvailable pattern already used at
@@ -31,10 +31,7 @@ export async function checkStockThresholds(materialId: string): Promise<void> {
     const lastStatus = previous?.lastStatus ?? "HEALTHY";
 
     if (SEVERITY[status] > SEVERITY[lastStatus]) {
-      // LOW can no longer be produced by classifyStockStatus (Min is now the only understock
-      // threshold), so STOCK_LOW is unreachable here — kept only so nothing breaks if that ever
-      // changes. CRITICAL is the one reachable transition.
-      const event = status === "CRITICAL" ? "STOCK_CRITICAL" : status === "LOW" ? "STOCK_LOW" : null;
+      const event = status === "CRITICAL" ? "STOCK_CRITICAL" : null;
       if (event) {
         await triggerNotification(event, {
           recordId: material.id,

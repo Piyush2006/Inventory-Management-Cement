@@ -4,10 +4,8 @@ import { IN_TRANSIT_LOCATION_TYPE, OPEN_REQUEST_STATUSES } from "@/lib/domain/en
 import { formatQty } from "@/lib/format";
 
 export interface AttentionItem {
-  kind: "critical" | "low";
   href: string;
   title: string;
-  subtitle: string;
   line1: string;
   line2: string;
   badgeLabel: string;
@@ -21,12 +19,16 @@ export async function getDashboardData() {
   const materials = await prisma.material.findMany({
     where: { active: true },
     include: { balances: { where: { location: { type: { not: IN_TRANSIT_LOCATION_TYPE } } } } },
+    orderBy: { name: "asc" },
   });
-  const locations = await prisma.location.findMany({ where: { active: true, type: { not: IN_TRANSIT_LOCATION_TYPE } }, include: { balances: true } });
+  const locations = await prisma.location.findMany({
+    where: { active: true, type: { not: IN_TRANSIT_LOCATION_TYPE } },
+    include: { balances: true, materialsDefaultHere: true },
+  });
 
   // One batched query for every material's QC Hold/Blocked quantities — avoids an N+1
   // getUnrestrictedAvailable() call per material. Status classification below uses this so
-  // QC Hold/Blocked stock can't make a material look falsely HEALTHY/LOW here either.
+  // QC Hold/Blocked stock can't make a material look falsely HEALTHY here either.
   const qualityBalances = await prisma.qualityBalance.findMany({ where: { materialId: { in: materials.map((m) => m.id) } } });
   const nonUnrestrictedByMaterial = new Map<string, number>();
   for (const q of qualityBalances) nonUnrestrictedByMaterial.set(q.materialId, (nonUnrestrictedByMaterial.get(q.materialId) ?? 0) + q.quantity);
@@ -36,37 +38,41 @@ export async function getDashboardData() {
     const currentStock = m.balances.reduce((s, b) => s + b.quantity, 0);
     if (m.uom === "MT") totalInventoryMt += currentStock;
     const unrestrictedStock = Math.max(0, currentStock - (nonUnrestrictedByMaterial.get(m.id) ?? 0));
-    const { status, reason } = classifyStockStatus({ currentStock: unrestrictedStock, minStock: m.minStock });
-    return { material: m, currentStock, unrestrictedStock, status, reason };
+    const { status } = classifyStockStatus({ currentStock: unrestrictedStock, minStock: m.minStock });
+    return { material: m, currentStock, unrestrictedStock, status };
   });
 
   const critical = materialRows.filter((r) => r.status === "CRITICAL");
-  const low = materialRows.filter((r) => r.status === "LOW");
 
+  // Silo Quick View is specifically the cement silo vessels, not every capacity-tracked location
+  // (yards/bunkers/stores/warehouses/production areas) — Location.type === "SILO" is exactly
+  // that set in this plant's data (see prisma/seed.ts), so filtering on the existing type field
+  // keeps this generic instead of hardcoding silo names. Fill percentage stays a physical/book
+  // reading only — never turned into a HEALTHY/CRITICAL classification, which is decided purely
+  // by material-level stock vs. minStock above, independent of how full its silo happens to be.
   const siloRows = locations
-    .filter((l) => l.capacity != null)
+    .filter((l) => l.type === "SILO" && l.capacity != null)
     .map((l) => {
       const total = l.balances.reduce((s, b) => s + b.quantity, 0);
-      const fillPct = l.capacity ? (total / l.capacity) * 100 : 0;
-      return { location: l, total, fillPct };
+      const capacity = l.capacity ?? 0;
+      const fillPct = capacity > 0 ? (total / capacity) * 100 : 0;
+      const material = l.materialsDefaultHere[0] ?? null;
+      return {
+        locationId: l.id,
+        locationName: l.name,
+        materialId: material?.id ?? null,
+        materialName: material?.name ?? null,
+        uom: l.capacityUom ?? material?.uom ?? "MT",
+        total,
+        capacity,
+        fillPct,
+      };
     })
-    .sort((a, b) => b.fillPct - a.fillPct);
+    .sort((a, b) => a.locationName.localeCompare(b.locationName));
 
-  const highFillSilos = siloRows.filter((s) => s.fillPct >= 90);
-
-  const [openRequests, urgentOpenRequests, notReceivedRequests, openStatusRows, recentMovements, inTransitBalances] = await Promise.all([
+  const [openRequests, openStatusRows, inTransitBalances] = await Promise.all([
     prisma.stockRequest.count({ where: { status: { in: OPEN_REQUEST_STATUSES } } }),
-    prisma.stockRequest.findMany({ where: { status: { in: OPEN_REQUEST_STATUSES }, priority: "URGENT" }, include: { material: true }, orderBy: { requiredByDate: "asc" } }),
-    // The one true "something went wrong" state in the lifecycle — delivered, but the requester
-    // says it never arrived. Needs a supervisor to investigate and re-arrange, so it's the
-    // request-side half of "Exceptions" (materials are the stock-side half).
-    prisma.stockRequest.findMany({ where: { status: "NOT_RECEIVED" }, include: { material: true }, orderBy: { notReceivedAt: "desc" } }),
     prisma.stockRequest.findMany({ where: { status: { in: OPEN_REQUEST_STATUSES } }, select: { status: true } }),
-    prisma.inventoryTransaction.findMany({
-      include: { material: true, sourceLocation: true, destinationLocation: true },
-      orderBy: { timestamp: "desc" },
-      take: 12,
-    }),
     prisma.inventoryBalance.findMany({ where: { location: { type: IN_TRANSIT_LOCATION_TYPE } }, include: { material: true } }),
   ]);
 
@@ -89,56 +95,30 @@ export async function getDashboardData() {
     count: statusCounts.get(s) ?? 0,
   }));
 
-  // Stock exceptions feed: materials below minimum stock, critical first. Request exceptions
-  // (Not Received) surface in their own Exceptions KPI/queue, not mixed into this material-only
-  // list — kept as one consistent item shape per the panel's own column layout.
-  const needsAttention: AttentionItem[] = [
-    ...critical.map((r) => ({
-      kind: "critical" as const,
-      href: `/inventory/${r.material.id}`,
-      title: r.material.name,
-      subtitle: "Material",
-      line1: `${formatQty(r.unrestrictedStock, r.material.uom)} available`,
-      line2: r.material.minStock != null ? `Minimum Stock: ${formatQty(r.material.minStock, r.material.uom)}` : "Below minimum stock",
-      badgeLabel: "CRITICAL",
-    })),
-    ...low.map((r) => ({
-      kind: "low" as const,
-      href: `/inventory/${r.material.id}`,
-      title: r.material.name,
-      subtitle: "Material",
-      line1: `${formatQty(r.unrestrictedStock, r.material.uom)} available`,
-      line2: r.material.minStock != null ? `Minimum Stock: ${formatQty(r.material.minStock, r.material.uom)}` : "Below minimum stock",
-      badgeLabel: "LOW",
-    })),
-  ];
+  // Materials below minimum stock (CRITICAL) — the app has only HEALTHY/CRITICAL (see
+  // classifyStockStatus), so every row here is CRITICAL; no separate "Low" tier to also show.
+  const needsAttention: AttentionItem[] = critical.map((r) => ({
+    href: `/inventory/${r.material.id}`,
+    title: r.material.name,
+    line1: `${formatQty(r.unrestrictedStock, r.material.uom)} available`,
+    line2: r.material.minStock != null ? `Minimum Stock: ${formatQty(r.material.minStock, r.material.uom)}` : "Below minimum stock",
+    badgeLabel: "CRITICAL",
+  }));
 
-  // 30-day consumption per material, batched — feeds the Days of Supply watchlist below without
-  // an N+1 computeDaysOfSupply() call per material.
-  const since30 = new Date();
-  since30.setDate(since30.getDate() - 30);
-  const consumption30 = await prisma.inventoryTransaction.findMany({
-    where: { transactionType: "CONSUMPTION", timestamp: { gte: since30 } },
-    select: { materialId: true, quantity: true },
+  // Dispatched Today — actually left the plant today (status DISPATCHED, dispatchedAt today),
+  // not just approved/loading. MT total covers only MT-uom materials (mirrors totalInTransitMt's
+  // own uom filter, since summing across different units would be meaningless); the sublabel's
+  // dispatch count covers every dispatch today regardless of uom.
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const dispatchedToday = await prisma.dispatch.findMany({
+    where: { status: "DISPATCHED", dispatchedAt: { gte: todayStart } },
+    include: { material: true },
   });
-  const consumption30ByMaterial = new Map<string, number>();
-  for (const c of consumption30) consumption30ByMaterial.set(c.materialId, (consumption30ByMaterial.get(c.materialId) ?? 0) + c.quantity);
+  const dispatchedTodayMt = dispatchedToday.filter((d) => d.material.uom === "MT").reduce((s, d) => s + d.quantity, 0);
 
-  // "Stock Requiring Attention" — sorted by soonest-to-run-out (Days of Supply), not just
-  // current threshold status, so a HEALTHY material that's burning down fast still shows up
-  // before it becomes a problem. Materials with no consumption history have no rate to sort
-  // by, so they're excluded here (they still show up in the main Inventory list).
-  const stockWatchlist = materialRows
-    .map((r) => {
-      const dailyRate = (consumption30ByMaterial.get(r.material.id) ?? 0) / 30;
-      const daysSupply = dailyRate > 1e-9 ? r.unrestrictedStock / dailyRate : null;
-      return { material: r.material, currentStock: r.currentStock, status: r.status, daysSupply };
-    })
-    .filter((r): r is typeof r & { daysSupply: number } => r.daysSupply != null)
-    .sort((a, b) => a.daysSupply - b.daysSupply)
-    .slice(0, 6);
-
-  // 14-day trend: total on-hand tonnage and daily consumption, for the 2 dashboard charts.
+  // 14-day trend: total on-hand tonnage and daily consumption, for the Inventory/Consumption
+  // Trend charts.
   const since = new Date();
   since.setDate(since.getDate() - 14);
   since.setHours(0, 0, 0, 0);
@@ -178,22 +158,14 @@ export async function getDashboardData() {
     kpi: {
       totalInventoryMt,
       criticalCount: critical.length,
-      lowCount: low.length,
       openRequestsCount: openRequests,
       totalInTransitMt,
-      exceptionsCount: notReceivedRequests.length,
+      dispatchedTodayMt,
     },
-    materialRows,
     critical,
-    low,
-    siloRows,
-    highFillSilos,
-    urgentOpenRequests,
-    notReceivedRequests,
-    requestsByStatus,
     needsAttention,
-    stockWatchlist,
-    recentMovements,
+    requestsByStatus,
+    siloRows,
     trend,
   };
 }

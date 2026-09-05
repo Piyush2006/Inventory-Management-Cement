@@ -32,3 +32,15 @@ export function formatDateTime(value: Date | string): string {
 export function formatPct(value: number, fractionDigits = 1): string {
   return `${value.toFixed(fractionDigits)}%`;
 }
+
+// Coarse "how long has this been sitting" label for a queue/list row — one unit, not a full
+// duration breakdown (that's formatShortDuration in the Lifecycle Gantt, a different use case).
+export function formatAge(ms: number): string {
+  if (ms < 60_000) return "Just now";
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"}`;
+}

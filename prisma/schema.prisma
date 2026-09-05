@@ -609,12 +609,12 @@ model Notification {
 }
 
 // Last-known stock status per material, used only to detect a WORSENING transition
-// (HEALTHY->LOW->CRITICAL) so Stock Low/Critical notifications fire once per transition,
-// not once per balance-changing action while already critical. Never read by any existing
-// inventory calculation — purely a notification-system cache.
+// (HEALTHY->CRITICAL) so a Stock Critical notification fires once per transition, not once per
+// balance-changing action while already critical. Never read by any existing inventory
+// calculation — purely a notification-system cache.
 model MaterialAlertState {
   materialId String   @id
-  lastStatus String   // HEALTHY | LOW | CRITICAL
+  lastStatus String   // HEALTHY | CRITICAL
   updatedAt  DateTime @updatedAt
 }
 
