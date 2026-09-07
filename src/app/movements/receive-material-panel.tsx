@@ -1,3 +1,6 @@
+"use client";
+
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Th, Td, EmptyState } from "@/components/ui";
 import { formatNumber, formatDate } from "@/lib/format";
@@ -8,12 +11,15 @@ const GRN_STATUS_STYLE: Record<string, string> = {
   POSTED: "text-[var(--status-healthy)] bg-[var(--status-healthy-bg)]",
   CANCELLED: "text-[var(--status-critical)] bg-[var(--status-critical-bg)]",
 };
+const GRN_STATUSES = Object.keys(GRN_STATUS_STYLE);
 
 type Receipt = {
   id: string;
   grnNumber: string;
   receiptDate: Date;
+  supplierId: string;
   supplierName: string;
+  materialId: string;
   materialName: string;
   category: string;
   receivedQuantity: number;
@@ -33,6 +39,21 @@ export function ReceiveMaterialPanel({
   materials: { id: string; name: string; uom: string }[];
   suppliers: { id: string; name: string }[];
 }) {
+  const [statusFilter, setStatusFilter] = useState("");
+  const [materialFilter, setMaterialFilter] = useState("");
+  const [supplierFilter, setSupplierFilter] = useState("");
+  const [dateFilter, setDateFilter] = useState("");
+
+  const filtered = useMemo(() => {
+    return receipts.filter((r) => {
+      if (statusFilter && r.status !== statusFilter) return false;
+      if (materialFilter && r.materialId !== materialFilter) return false;
+      if (supplierFilter && r.supplierId !== supplierFilter) return false;
+      if (dateFilter && r.receiptDate.toISOString().slice(0, 10) !== dateFilter) return false;
+      return true;
+    });
+  }, [receipts, statusFilter, materialFilter, supplierFilter, dateFilter]);
+
   return (
     <div className="space-y-4">
       <p className="text-xs text-muted-soft">
@@ -47,8 +68,30 @@ export function ReceiveMaterialPanel({
         </div>
       )}
 
-      {receipts.length === 0 ? (
-        <EmptyState title="No receipts recorded yet" />
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-accent">
+          <option value="">All statuses</option>
+          {GRN_STATUSES.map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+        <select value={materialFilter} onChange={(e) => setMaterialFilter(e.target.value)} className="rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-accent">
+          <option value="">All materials</option>
+          {materials.map((m) => (
+            <option key={m.id} value={m.id}>{m.name}</option>
+          ))}
+        </select>
+        <select value={supplierFilter} onChange={(e) => setSupplierFilter(e.target.value)} className="rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-accent">
+          <option value="">All suppliers</option>
+          {suppliers.map((s) => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
+        <input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} className="rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-accent" />
+      </div>
+
+      {filtered.length === 0 ? (
+        <EmptyState title={receipts.length === 0 ? "No receipts recorded yet" : "No receipts match"} />
       ) : (
         <div className="overflow-x-auto scrollbar-thin">
           <table className="w-full border-collapse">
@@ -66,7 +109,7 @@ export function ReceiveMaterialPanel({
               </tr>
             </thead>
             <tbody>
-              {receipts.map((r) => (
+              {filtered.map((r) => (
                 <tr key={r.id} className="border-b border-border-soft last:border-0 transition-colors hover:bg-surface-raised">
                   <Td><Link href={`/receipts/${r.id}`} className="text-accent hover:underline">{r.grnNumber}</Link></Td>
                   <Td className="whitespace-nowrap text-xs text-muted">{formatDate(r.receiptDate)}</Td>

@@ -14,7 +14,7 @@ type Material = { id: string; name: string; uom: string };
 type Location = { id: string; name: string };
 type BalanceRow = { materialId: string; materialName: string; uom: string; locationId: string; locationName: string; quantity: number; unrestrictedQuantity: number; tolerancePct: number };
 type Receipt = {
-  id: string; grnNumber: string; receiptDate: Date; supplierName: string; materialName: string; category: string;
+  id: string; grnNumber: string; receiptDate: Date; supplierId: string; supplierName: string; materialId: string; materialName: string; category: string;
   receivedQuantity: number; acceptedQuantity: number; rejectedQuantity: number; status: string;
 };
 type DispatchRow = {

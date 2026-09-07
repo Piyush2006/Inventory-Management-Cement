@@ -131,7 +131,10 @@ export default async function RequestsPage() {
 
   const [openRows, historyRows] = await Promise.all([
     prisma.stockRequest.findMany({ where: openWhere, include, orderBy: { createdAt: "desc" }, take: 50 }),
-    prisma.stockRequest.findMany({ where: historyWhere, include, orderBy: { updatedAt: "desc" }, take: 30 }),
+    // Raised from 30 — with a fuller request history (Issue requests now spanning weeks) the
+    // old cap started silently hiding older closed requests with no way to reach them (no
+    // pagination or date filter on this tab). 100 comfortably covers current + near-future volume.
+    prisma.stockRequest.findMany({ where: historyWhere, include, orderBy: { updatedAt: "desc" }, take: 100 }),
   ]);
 
   return (

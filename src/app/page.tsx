@@ -1,17 +1,22 @@
-import Link from "next/link";
+import { Suspense } from "react";
 import { getDashboardData } from "@/lib/inventory/dashboard";
 import { Panel } from "@/components/ui";
-import { TrendChart } from "@/components/charts/trend-chart";
 import { StatCard, NeedsAttentionPanel, RequestStatusPanel } from "./dashboard-widgets";
 import { SiloQuickView } from "@/components/dashboard/silo-quick-view";
+import { MaterialFlowChart } from "@/components/dashboard/material-flow-chart";
 import { BruceChat } from "@/components/bruce-chat";
 
 export const dynamic = "force-dynamic";
 
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 // No restrictToRequestsOnly gate — every non-Requester-exclusive role, Indentor (Requester)
 // included, has full read access to the Dashboard. Nothing here is a write action.
-export default async function DashboardPage() {
-  const data = await getDashboardData();
+export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ from?: string; to?: string }> }) {
+  const params = await searchParams;
+  const flowStartDate = params.from && ISO_DATE_RE.test(params.from) ? new Date(params.from) : undefined;
+  const flowEndDate = params.to && ISO_DATE_RE.test(params.to) ? new Date(params.to) : undefined;
+  const data = await getDashboardData(flowStartDate, flowEndDate);
 
   return (
     <div className="space-y-3">
@@ -23,20 +28,22 @@ export default async function DashboardPage() {
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1fr_380px] xl:items-start">
         <div className="min-w-0 space-y-3">
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <StatCard tone="critical" label="Critical Stock" value={data.kpi.criticalCount} unit="Items" href="/inventory?status=CRITICAL" sublabel="Materials below safe level" />
+            <StatCard tone="critical" label="Critical Stock" value={data.kpi.criticalCount} unit="Items" href="/inventory?status=CRITICAL" sublabel="Below minimum stock" />
             <StatCard tone="healthy" label="Open Requests" value={data.kpi.openRequestsCount} unit="Requests" href="/requests" sublabel="Awaiting action" />
             <StatCard tone="transit" label="In Transit" value={data.kpi.totalInTransitMt} unit="MT" href="/requests" />
             <StatCard tone="exception" label="Dispatched Today" value={data.kpi.dispatchedTodayMt} unit="MT" href="/movements?tab=DISPATCH" />
           </div>
 
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <Panel title="Inventory Trend (14 days)" action={<Link href="/reports" className="text-xs text-accent hover:underline">View details →</Link>}>
-              <TrendChart data={data.trend} series={[{ dataKey: "stockMt", color: "#3aa0ff", label: "Stock Level", unit: "MT" }]} height={120} />
-            </Panel>
-            <Panel title="Consumption Trend (14 days)" action={<Link href="/reports" className="text-xs text-accent hover:underline">View details →</Link>}>
-              <TrendChart data={data.trend} series={[{ dataKey: "consumptionMt", color: "#f5a623", label: "Consumption", unit: "MT/day" }]} height={120} />
-            </Panel>
-          </div>
+          <Panel title="Inventory Movement">
+            <Suspense fallback={<div className="p-4 text-sm text-muted-soft">Loading…</div>}>
+              <MaterialFlowChart
+                materials={data.materialFlow.materials}
+                defaultMaterialId={data.materialFlow.defaultMaterialId}
+                seriesByMaterial={data.materialFlow.seriesByMaterial}
+                range={data.materialFlow.range}
+              />
+            </Suspense>
+          </Panel>
 
           <SiloQuickView silos={data.siloRows} />
 

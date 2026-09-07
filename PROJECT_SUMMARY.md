@@ -168,31 +168,60 @@ Consumption History table above it.
 
 ## Dashboard
 
-Every number traces to a live query — no dashboard-only calculation, no hardcoded figures. Final
-shipped layout (after an interim "Your Actions" role-scoped queue + merged trend chart design was
-tried and then explicitly superseded by a pasted reference image the user asked to match exactly):
+Every number traces to a live query — no dashboard-only calculation, no hardcoded figures. Went
+through several iterations this project (an interim "Your Actions" role-scoped queue + AI Insights
+panel, then a pasted reference image the user asked to match exactly, then further simplification
+per direct feedback). Current shipped layout:
 
 1. **KPI strip** — 4 colored icon-badge cards: **Critical Stock** (`classifyStockStatus`, never from
-   silo fill %), **Open Requests** (`OPEN_REQUEST_STATUSES` count), **In Transit** (MT balance at the
-   virtual in-transit location + a live count of `IN_TRANSIT`-status requests), **Network Days of
-   Supply** (the median of every material's own `unrestrictedStock / 30-day avg consumption` ratio —
-   same formula `computeDaysOfSupply()` uses per material, just reduced to one headline figure; median
-   not mean, so one outlier can't skew it).
-2. **Inventory Trend (14 days)** and **Consumption Trend (14 days)** — two separate panels side by
-   side (`TrendChart`, `src/components/charts/trend-chart.tsx`, which supports multiple `series` with
-   independent Y-axes via `axis: "left" | "right"`, used here with one series each).
+   silo fill %; sublabel "Below minimum stock" — matches the real `minStock` field name used
+   everywhere else, not invented "safe level" phrasing), **Open Requests** (`OPEN_REQUEST_STATUSES`
+   count), **In Transit** (MT balance at the virtual in-transit location), **Dispatched Today** (MT
+   total of today's `Dispatch` rows with `status: DISPATCHED` — actually left the plant, not just
+   approved/loading).
+2. **Inventory Movement** (`src/components/dashboard/material-flow-chart.tsx`) — a single combined
+   panel replacing the old separate Inventory/Consumption trend charts, and the most-iterated piece
+   of this whole redesign (went through a hover-tooltip version, an always-visible-day-card version,
+   a 4/5-stage zigzag, a grouped-bar version, and settled on this one after the user's own suggestion
+   to try a step chart). One material's flow renders as a single continuous stepped line+area
+   (Recharts `type="stepAfter"`, not diagonal slopes — flat plateaus with sharp vertical jumps), built
+   by flattening the day-by-day series into one walk (opening → a point per non-zero
+   Received/Consumed/Dispatched/Transferred/Adjusted category, in that fixed order → closing, where
+   each day's closing point IS the next day's opening point) so the whole window is one unbroken path;
+   a day with zero movement still gets a flat neutral-colored connector so there's never a visual gap.
+   Blue boundary markers (drawn via the `dot` render-prop, not `label` — proven far more reliable for
+   sparse multi-segment Lines) tag every day transition "Opening"/"Closing"/both. Hovering any point
+   shows a custom tooltip with that day's full Opening/Received/Consumed/Dispatched/Transferred/
+   Adjusted/Closing breakdown, looked up by x-position rather than Recharts' own per-series payload —
+   no always-visible day-card row or summary-tile row below the chart (both tried, then explicitly
+   removed). Fully configurable date range via two native `<input type="date">` pickers (not a fixed
+   7/14/30-day dropdown) syncing `?from=`/`?to=` query params; `getDashboardData(startDate?, endDate?)`
+   always walks backward from *today's* real current stock through the full requested lookback
+   (capped at 366 days) then slices to the requested window, floored at 0 (on-hand stock is never
+   negative, however far back a custom range reaches). The material dropdown is sorted by a
+   "heartbeat score" (days with a genuine up-then-down movement, not just raw volume) so richly-
+   populated materials sort to the top and thin/spare-part materials sink to the bottom. All of it
+   comes from `InventoryTransaction` rows, categorized purely by the ledger's existing signed
+   convention (RECEIPT/TRANSFER_IN/OPENING_BALANCE inward; CONSUMPTION/DISPATCH/TRANSFER_OUT outward;
+   ADJUSTMENT signed by which side is set); the same-material, same-plant `TRANSFER` type is
+   deliberately excluded since it nets to zero for total on-hand. Dispatch only ever appears for
+   genuine finished/packaged goods (Cement GP/GB/HE, 20kg Cement Bag) — raw materials/fuel/additives/
+   intermediates only show Received/Consumed, matching real plant operations.
 3. **Silo Quick View** (`src/components/dashboard/silo-quick-view.tsx`) — strictly the cement silos
    (`Location.type === "SILO"`, which in this plant's data is exactly the 3 cement silos — filtered on
    the type field, not hardcoded names), each rendered as a drawn silo vessel (cylinder + hopper +
    legs) plus a horizontal progress bar, both always green. Fill percentage is a physical/book reading
    only — it never feeds `classifyStockStatus` or renders a HEALTHY/CRITICAL badge; an 18%-full silo
    is not "critical" just because it's a small number.
-4. **Needs Attention** / **Request Status** / **Stock Requiring Attention** — three panels side by
-   side. Needs Attention lists CRITICAL materials (top 5, "View all →" to `/inventory?status=CRITICAL`).
-   Request Status is a plain colored-dot count breakdown of every open `StockRequest` status. Stock
-   Requiring Attention is the Days of Supply watchlist, top 5 ascending.
-5. **Inventory** (top 5 of the full active-material list, "View all →" to `/inventory`) and **Recent
-   Movements** (latest 5, "Full ledger →" to `/ledger`) side by side at the bottom.
+4. **Needs Attention** / **Request Status** — two panels side by side. Needs Attention lists CRITICAL
+   materials (top 5, "View all →" to `/inventory?status=CRITICAL`). Request Status is a horizontal
+   bar graph (one bar per open `StockRequest` status, colored per status, length proportional to
+   count) — a third panel duplicating this as a table ("Stock Requiring Attention") was removed once
+   the user pointed out the overlap.
+
+No Inventory table or Recent Movements panel on the Dashboard — both were tried and then explicitly
+removed ("Inventory and Movement is not needed in dashboard"); `/inventory` and `/ledger` remain the
+one source for each.
 
 The right rail is the **Bruce AI** chat panel alone (`src/components/bruce-chat.tsx`) — unchanged
 logic/intent-matching/RBAC throughout this whole redesign. An earlier iteration added a separate
@@ -200,10 +229,6 @@ role-scoped "Your Actions" queue (`src/lib/inventory/actionQueue.ts`) and an "AI
 panel reusing `getInventoryInsights()`; both were removed once the user asked to match the reference
 image exactly instead — `getInventoryInsights()` itself is untouched and still backs Bruce AI's own
 "what needs attention" chat answers (`src/lib/bruce/intents.ts`).
-
-No Request Status breakdown and no separate "Needs Attention" panel — Critical materials already
-surface via the KPI and the top-severity AI Insight rows; showing the same material a third time in
-its own near-identical card was deliberately removed as duplicate presentation.
 
 `getInventoryInsights()` (`src/lib/inventory/insights.ts`) is deterministic risk scoring + templated
 explanation — four insight types in priority order: **High Inventory Risk**, **Usable Stock Risk**
@@ -312,8 +337,26 @@ real multi-day data to show instead of every stage landing within milliseconds o
 Dispatches spanning every status including `LOADING`. Two physical counts left pending (one to
 approve, one to reject demo-able side by side) plus one already-posted example. A reported-but-not-
 completed Spare Return alongside a completed `DAMAGED` one on the same request (a partial-return-over-
-multiple-visits story). Quality Hold/Blocked examples, GRN receipts across six suppliers, ~18 days of
-consumption history, default Notification Rules, and example Notifications.
+multiple-visits story). Quality Hold/Blocked examples, GRN receipts across six suppliers, default
+Notification Rules, and example Notifications.
+
+**Daily movement heartbeat** — every raw material/fuel/additive/intermediate/finished-good material
+(13 in total; excludes spares and the two catalog-only materials with no location, Raw Meal/Shale)
+gets a real Receipt+Consumption(+Dispatch, finished goods only) transaction *every single day* from
+just after its `OPENING_BALANCE` timestamp through today, sized as a fixed fraction of a target
+balance (never re-read from a draining live balance mid-generation — an earlier version that did
+compounded into near-zero/negative balances across a 32-day window, since fixed). Dispatch only ever
+applies to genuine finished/packaged goods (Cement GP/GB/HE, 20kg Cement Bag) — raw materials don't
+get dispatched to a customer. ~30 of the Issue-purpose Consumption entries are additionally backed by
+real `StockRequest` records run through the actual request lifecycle (not raw ledger inserts), so
+Consumption is traceable from both the Dashboard chart and the Requests page. Every synthetic
+RECEIPT/DISPATCH transaction has a matching `MaterialReceipt`/`Dispatch` entity row (linked via
+`inventoryTransactionId`) — the Movements page's Receive/Dispatch tabs read those entity tables, not
+the raw ledger, so a transaction without one would be invisible there despite showing on the Dashboard
+chart (a real bug caught mid-session and fixed with a backfill). The Receive Material tab's row cap
+was removed (previously hard-capped at 15, silently hiding all but the newest ~1 day of GRNs) and
+given the same status/material/supplier/date filter UI the Dispatch tab already had; Request History's
+cap was raised 30 → 100 for the same reason.
 
 ```bash
 npm install

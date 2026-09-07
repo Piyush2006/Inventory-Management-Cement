@@ -49,7 +49,10 @@ export default async function StockOperationsPage({ searchParams }: { searchPara
     // same pattern already used in inventory/page.tsx and dashboard.ts.
     prisma.qualityBalance.findMany({}),
     recentByType("ADJUSTMENT"),
-    prisma.materialReceipt.findMany({ include: { supplier: true, material: true }, orderBy: { createdAt: "desc" }, take: 15 }),
+    // No take limit — matches Dispatch below (unbounded, client-filtered via ReceiveMaterialPanel)
+    // rather than Adjustment's recentByType top-15, since a receipt history spanning weeks would
+    // otherwise be silently truncated to the newest handful with no way to see the rest.
+    prisma.materialReceipt.findMany({ include: { supplier: true, material: true }, orderBy: { createdAt: "desc" } }),
     prisma.supplier.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
     getCurrentUser(),
   ]);
@@ -122,7 +125,9 @@ export default async function StockOperationsPage({ searchParams }: { searchPara
     id: r.id,
     grnNumber: r.grnNumber,
     receiptDate: r.receiptDate,
+    supplierId: r.supplierId,
     supplierName: r.supplier.name,
+    materialId: r.materialId,
     materialName: r.material.name,
     category: r.material.category,
     receivedQuantity: r.receivedQuantity,

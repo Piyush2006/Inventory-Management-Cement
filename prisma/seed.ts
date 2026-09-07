@@ -486,13 +486,13 @@ async function main() {
 
   console.log("Building consumption history across the catalog — Days of Supply, Consumption History, and the dashboard trend charts all read this...");
   async function consumptionHistory(materialId: string, locationId: string, uom: string, processName: string, opts: { days?: number; dailyRatePct?: number } = {}) {
-    const days = opts.days ?? 18;
-    const dailyRatePct = opts.dailyRatePct ?? 0.012;
+    const days = opts.days ?? 32;
+    const dailyRatePct = opts.dailyRatePct ?? 0.03;
     const balance = await prisma.inventoryBalance.findUnique({ where: { materialId_locationId: { materialId, locationId } } });
     const current = balance?.quantity ?? 0;
     const dailyQty = current * dailyRatePct;
     if (dailyQty < 0.5) return; // not enough stock here for a meaningful daily draw-down
-    for (let i = days; i >= 1; i--) {
+    for (let i = days; i >= 0; i--) {
       const jitter = 0.75 + Math.random() * 0.5; // day-to-day variability so trend charts aren't a flat line
       const quantity = Math.max(0.1, Math.round(dailyQty * jitter * 10) / 10);
       const timestamp = new Date(Date.now() - i * 86400000);
@@ -512,7 +512,67 @@ async function main() {
   await consumptionHistory(cementGp.id, cementSilo1.id, "MT", "Packing Area");
   await consumptionHistory(cementGb.id, cementSilo2.id, "MT", "Packing Area");
   await consumptionHistory(cementHe.id, cementSilo3.id, "MT", "Packing Area");
-  await consumptionHistory(cementBag.id, packingArea.id, "Nos", "Dispatch Loading", { dailyRatePct: 0.01 });
+  await consumptionHistory(cementBag.id, packingArea.id, "Nos", "Dispatch Loading", { dailyRatePct: 0.025 });
+
+  console.log("Building periodic receipt (GRN) and dispatch history alongside it — so the dashboard's Inventory Movement chart shows Received/Dispatched bars, not just Consumed...");
+  // Periodic inbound deliveries (a truckload every few days, not a daily trickle) for raw
+  // materials — mirrors consumptionHistory's "size off current balance" approach so it stays
+  // proportionate to whatever quantity each material already carries.
+  async function receiptHistory(materialId: string, locationId: string, uom: string, opts: { days?: number; intervalDays?: number; batchPct?: number } = {}) {
+    const days = opts.days ?? 32;
+    // Daily (not every-few-days) so the chart shows a genuine up-then-down "heartbeat" every
+    // single day rather than long flat stretches broken up by occasional large jumps.
+    const intervalDays = opts.intervalDays ?? 1;
+    const batchPct = opts.batchPct ?? 0.06;
+    const balance = await prisma.inventoryBalance.findUnique({ where: { materialId_locationId: { materialId, locationId } } });
+    const current = balance?.quantity ?? 0;
+    const batchQty = current * batchPct;
+    if (batchQty < 0.5) return;
+    for (let i = days; i >= 0; i -= intervalDays) {
+      const jitter = 0.8 + Math.random() * 0.4;
+      const quantity = Math.max(0.1, Math.round(batchQty * jitter * 10) / 10);
+      const timestamp = new Date(Date.now() - i * 86400000);
+      await postMovement({ materialId, transactionType: "RECEIPT", quantity, uom, locationId, reference: `GRN-${timestamp.toISOString().slice(0, 10)}`, timestamp });
+    }
+  }
+  // Periodic outbound truckloads — to customers for finished cement products, and to sister
+  // units/other cement plants for surplus raw materials and byproducts (clinker, fly ash and
+  // slag inter-plant trading is standard practice in the industry).
+  async function dispatchHistory(materialId: string, locationId: string, uom: string, opts: { days?: number; intervalDays?: number; batchPct?: number } = {}) {
+    const days = opts.days ?? 32;
+    const intervalDays = opts.intervalDays ?? 1;
+    const batchPct = opts.batchPct ?? 0.05;
+    const balance = await prisma.inventoryBalance.findUnique({ where: { materialId_locationId: { materialId, locationId } } });
+    const current = balance?.quantity ?? 0;
+    const batchQty = current * batchPct;
+    if (batchQty < 0.5) return;
+    for (let i = days; i >= 0; i -= intervalDays) {
+      const jitter = 0.8 + Math.random() * 0.4;
+      const quantity = Math.max(0.1, Math.round(batchQty * jitter * 10) / 10);
+      const timestamp = new Date(Date.now() - i * 86400000);
+      await postMovement({ materialId, transactionType: "DISPATCH", quantity, uom, locationId, reference: `Dispatch log ${timestamp.toISOString().slice(0, 10)}`, timestamp });
+    }
+  }
+  await receiptHistory(limestone.id, limestoneStockpileA.id, "MT");
+  await receiptHistory(coal.id, coalYard.id, "MT");
+  await receiptHistory(gypsum.id, gypsumStore.id, "MT");
+  await receiptHistory(clinker.id, clinkerStore.id, "MT");
+  await receiptHistory(flyAsh.id, maintenanceStore.id, "MT");
+  await receiptHistory(slag.id, maintenanceStore.id, "MT");
+  await receiptHistory(ironCorrective.id, maintenanceStore.id, "MT");
+  await receiptHistory(sand.id, maintenanceStore.id, "MT");
+  await dispatchHistory(cementGp.id, cementSilo1.id, "MT");
+  await dispatchHistory(cementGb.id, cementSilo2.id, "MT");
+  await dispatchHistory(cementHe.id, cementSilo3.id, "MT");
+  await dispatchHistory(cementBag.id, packingArea.id, "Nos", { batchPct: 0.03 });
+  await dispatchHistory(limestone.id, limestoneStockpileA.id, "MT", { batchPct: 0.025 });
+  await dispatchHistory(coal.id, coalYard.id, "MT", { batchPct: 0.025 });
+  await dispatchHistory(gypsum.id, gypsumStore.id, "MT", { batchPct: 0.025 });
+  await dispatchHistory(clinker.id, clinkerStore.id, "MT", { batchPct: 0.025 });
+  await dispatchHistory(flyAsh.id, maintenanceStore.id, "MT", { batchPct: 0.025 });
+  await dispatchHistory(slag.id, maintenanceStore.id, "MT", { batchPct: 0.025 });
+  await dispatchHistory(ironCorrective.id, maintenanceStore.id, "MT", { batchPct: 0.025 });
+  await dispatchHistory(sand.id, maintenanceStore.id, "MT", { batchPct: 0.025 });
 
   console.log("Seeding default Notification Rules — spec section 6's examples plus coverage of the remaining trigger library...");
   async function rule(event: keyof typeof NOTIFICATION_EVENT_META, recipient: { recipientType: "ROLE" | "RELEVANT_USER"; recipientRole?: string }, channel: "IN_APP" | "EMAIL" | "BOTH") {

@@ -11,7 +11,9 @@ export interface AttentionItem {
   badgeLabel: string;
 }
 
-export async function getDashboardData() {
+const MAX_FLOW_LOOKBACK_DAYS = 366;
+
+export async function getDashboardData(flowStartDate?: Date, flowEndDate?: Date) {
   // Every balances include below excludes the virtual "In Transit (Internal)" location —
   // material mid-delivery isn't on hand anywhere yet, so it must never inflate a displayed
   // total. This must stay consistent with getTotalOnHand() (balance.ts), which the Material
@@ -117,42 +119,123 @@ export async function getDashboardData() {
   });
   const dispatchedTodayMt = dispatchedToday.filter((d) => d.material.uom === "MT").reduce((s, d) => s + d.quantity, 0);
 
-  // 14-day trend: total on-hand tonnage and daily consumption, for the Inventory/Consumption
-  // Trend charts.
-  const since = new Date();
-  since.setDate(since.getDate() - 14);
-  since.setHours(0, 0, 0, 0);
-  // A TRANSFER_OUT/TRANSFER_IN row has both a real leg and a virtual in-transit leg on the
-  // SAME row — excluding the virtual side here (not just from the balances above) keeps these
-  // deltas honest: TRANSFER_OUT is a pure decrease to on-hand total, TRANSFER_IN a pure
-  // increase, instead of netting to a false zero as if the material never left real inventory.
-  const [inboundTx, outboundTx, consumptionTx] = await Promise.all([
-    prisma.inventoryTransaction.findMany({
-      where: { timestamp: { gte: since }, destinationLocationId: { not: null }, destinationLocation: { type: { not: IN_TRANSIT_LOCATION_TYPE } }, material: { uom: "MT" } },
-      select: { quantity: true, timestamp: true },
-    }),
-    prisma.inventoryTransaction.findMany({
-      where: { timestamp: { gte: since }, sourceLocationId: { not: null }, sourceLocation: { type: { not: IN_TRANSIT_LOCATION_TYPE } }, material: { uom: "MT" } },
-      select: { quantity: true, timestamp: true },
-    }),
-    prisma.inventoryTransaction.findMany({ where: { timestamp: { gte: since }, transactionType: "CONSUMPTION" }, select: { quantity: true, timestamp: true } }),
-  ]);
-  const netByDay = new Map<string, number>();
-  const consumptionByDay = new Map<string, number>();
-  for (const t of inboundTx) netByDay.set(t.timestamp.toISOString().slice(0, 10), (netByDay.get(t.timestamp.toISOString().slice(0, 10)) ?? 0) + t.quantity);
-  for (const t of outboundTx) netByDay.set(t.timestamp.toISOString().slice(0, 10), (netByDay.get(t.timestamp.toISOString().slice(0, 10)) ?? 0) - t.quantity);
-  for (const t of consumptionTx) consumptionByDay.set(t.timestamp.toISOString().slice(0, 10), (consumptionByDay.get(t.timestamp.toISOString().slice(0, 10)) ?? 0) + t.quantity);
+  // Inventory Movement — a single material's own daily flow (opening -> received -> consumed
+  // -> dispatched -> transferred out -> closing) across the last 14 days, replacing the two
+  // separate network-wide trend charts with one richer per-material view. Every category comes
+  // straight off the existing signed ledger convention (positive magnitude, direction implied by
+  // which of sourceLocationId/destinationLocationId is set — same as everywhere else in this
+  // app): RECEIPT/TRANSFER_IN/OPENING_BALANCE are inward, CONSUMPTION/DISPATCH/TRANSFER_OUT are
+  // outward, ADJUSTMENT is signed by which side is set. The plain same-material TRANSFER type is
+  // deliberately excluded — it moves stock between two real locations of the SAME material, so it
+  // nets to zero for total on-hand and isn't a real inward/outward event.
+  // Resolves to an explicit [start, end] date pair (both inclusive, end never past today — there's
+  // no future data to show). The walk below always starts from today's real current stock and
+  // steps backward through every day since `start`, regardless of where `end` falls, then the
+  // displayed series is sliced down to [start, end] — so picking an end date in the past still
+  // anchors correctly to a real, live balance rather than a guessed one.
+  const endDate = flowEndDate ? new Date(flowEndDate) : new Date(todayStart);
+  endDate.setHours(0, 0, 0, 0);
+  if (endDate.getTime() > todayStart.getTime()) endDate.setTime(todayStart.getTime());
 
-  const trend: { date: string; stockMt: number; consumptionMt: number }[] = [];
-  let running = totalInventoryMt;
-  for (let i = 0; i <= 14; i++) {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    d.setDate(d.getDate() - i);
-    const key = d.toISOString().slice(0, 10);
-    trend.unshift({ date: key, stockMt: Math.max(0, running), consumptionMt: consumptionByDay.get(key) ?? 0 });
-    running -= netByDay.get(key) ?? 0;
+  const defaultStart = new Date(todayStart);
+  defaultStart.setDate(defaultStart.getDate() - 13);
+  const startDate = flowStartDate ? new Date(flowStartDate) : defaultStart;
+  startDate.setHours(0, 0, 0, 0);
+  if (startDate.getTime() > endDate.getTime()) startDate.setTime(endDate.getTime());
+  const earliestAllowed = new Date(todayStart);
+  earliestAllowed.setDate(earliestAllowed.getDate() - MAX_FLOW_LOOKBACK_DAYS);
+  if (startDate.getTime() < earliestAllowed.getTime()) startDate.setTime(earliestAllowed.getTime());
+
+  const lookbackDays = Math.round((todayStart.getTime() - startDate.getTime()) / 86400000);
+  const endDateKey = endDate.toISOString().slice(0, 10);
+
+  const flowTx = await prisma.inventoryTransaction.findMany({
+    where: {
+      timestamp: { gte: startDate },
+      transactionType: { in: ["RECEIPT", "TRANSFER_IN", "OPENING_BALANCE", "CONSUMPTION", "DISPATCH", "TRANSFER_OUT", "ADJUSTMENT"] },
+    },
+    select: { materialId: true, transactionType: true, quantity: true, timestamp: true, sourceLocationId: true, destinationLocationId: true },
+  });
+
+  interface DayBucket { received: number; consumed: number; dispatched: number; transferredOut: number; adjusted: number }
+  function emptyBucket(): DayBucket {
+    return { received: 0, consumed: 0, dispatched: 0, transferredOut: 0, adjusted: 0 };
   }
+  // materialId -> "YYYY-MM-DD" -> bucket
+  const currentByMaterialDay = new Map<string, Map<string, DayBucket>>();
+
+  for (const t of flowTx) {
+    const dayKey = t.timestamp.toISOString().slice(0, 10);
+    let byDay = currentByMaterialDay.get(t.materialId);
+    if (!byDay) { byDay = new Map(); currentByMaterialDay.set(t.materialId, byDay); }
+    let bucket = byDay.get(dayKey);
+    if (!bucket) { bucket = emptyBucket(); byDay.set(dayKey, bucket); }
+
+    if (t.transactionType === "RECEIPT" || t.transactionType === "TRANSFER_IN" || t.transactionType === "OPENING_BALANCE") {
+      bucket.received += t.quantity;
+    } else if (t.transactionType === "CONSUMPTION") {
+      bucket.consumed += t.quantity;
+    } else if (t.transactionType === "DISPATCH") {
+      bucket.dispatched += t.quantity;
+    } else if (t.transactionType === "TRANSFER_OUT") {
+      bucket.transferredOut += t.quantity;
+    } else if (t.transactionType === "ADJUSTMENT") {
+      bucket.adjusted += t.destinationLocationId ? t.quantity : -t.quantity;
+    }
+  }
+
+  const currentStockByMaterial = new Map(materialRows.map((r) => [r.material.id, r.currentStock]));
+
+  interface FlowDay { date: string; opening: number; received: number; consumed: number; dispatched: number; transferredOut: number; adjusted: number; closing: number }
+  const seriesByMaterial: Record<string, FlowDay[]> = {};
+  const heartbeatScoreByMaterial = new Map<string, number>();
+  let defaultMaterialId: string | null = null;
+  let defaultMaterialActivity = -1;
+
+  for (const m of materials) {
+    const byDay = currentByMaterialDay.get(m.id);
+    const allDays: FlowDay[] = [];
+    // Walk backward from today's real current stock (already known) so every closing value in
+    // the series is anchored to a real, live balance — never a guessed/derived starting point —
+    // then slice down to the requested [startDate, endDate] window below.
+    let closing = currentStockByMaterial.get(m.id) ?? 0;
+    for (let i = 0; i <= lookbackDays; i++) {
+      const d = new Date(todayStart);
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      const bucket = byDay?.get(key) ?? emptyBucket();
+      // Floored at 0 — on-hand stock is never negative. Without this, a long custom lookback
+      // range can walk far enough back that cumulative historical outflows exceed today's real
+      // balance, which would otherwise surface as a physically impossible negative "opening".
+      const opening = Math.max(0, closing - bucket.received + bucket.consumed + bucket.dispatched + bucket.transferredOut - bucket.adjusted);
+      allDays.unshift({ date: key, opening, ...bucket, closing });
+      closing = opening;
+    }
+    const days = allDays.filter((d) => d.date <= endDateKey);
+    seriesByMaterial[m.id] = days;
+
+    const activity = days.reduce((s, d) => s + d.received + d.consumed + d.dispatched, 0);
+    if (activity > defaultMaterialActivity) {
+      defaultMaterialActivity = activity;
+      defaultMaterialId = m.id;
+    }
+
+    // "Good heartbeat" = most days with a genuine up-then-down movement (a receipt AND an
+    // outflow on the same day), not just raw volume — a material with one huge spike scores
+    // lower here than one with a steady daily zigzag, which is what actually reads well on
+    // the chart. Ties broken by total activity.
+    const heartbeatDays = days.filter((d) => d.received > 1e-6 && (d.consumed > 1e-6 || d.dispatched > 1e-6)).length;
+    heartbeatScoreByMaterial.set(m.id, heartbeatDays * 1e6 + activity);
+  }
+
+  const sortedMaterials = [...materials].sort((a, b) => (heartbeatScoreByMaterial.get(b.id) ?? 0) - (heartbeatScoreByMaterial.get(a.id) ?? 0));
+
+  const materialFlow = {
+    materials: sortedMaterials.map((m) => ({ id: m.id, name: m.name, uom: m.uom })),
+    defaultMaterialId: defaultMaterialId ?? materials[0]?.id ?? null,
+    seriesByMaterial,
+    range: { start: startDate.toISOString().slice(0, 10), end: endDateKey, maxDate: todayStart.toISOString().slice(0, 10) },
+  };
 
   return {
     kpi: {
@@ -166,6 +249,6 @@ export async function getDashboardData() {
     needsAttention,
     requestsByStatus,
     siloRows,
-    trend,
+    materialFlow,
   };
 }
