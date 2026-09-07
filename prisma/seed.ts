@@ -484,95 +484,103 @@ async function main() {
   // One spare request left NEW_REQUEST — a live actionable item in the Inventory Manager's queue.
   await createStockRequest({ materialId: filterBag.id, quantityRequested: 50, requiredByDate: new Date(Date.now() + 5 * 86400000), fromLocationId: engineeringStore.id, toLocationId: maintenanceStore.id, reason: "Planned baghouse shutdown — filter bag replacement", requestedByUserId: priya.id, requestType: "SPARE", equipmentRef: "Baghouse BH-1" });
 
-  console.log("Building consumption history across the catalog — Days of Supply, Consumption History, and the dashboard trend charts all read this...");
-  async function consumptionHistory(materialId: string, locationId: string, uom: string, processName: string, opts: { days?: number; dailyRatePct?: number } = {}) {
-    const days = opts.days ?? 32;
-    const dailyRatePct = opts.dailyRatePct ?? 0.03;
+  console.log("Building daily movement history across the catalog — Days of Supply, Consumption History, and the dashboard's Inventory Movement chart all read this...");
+  // A single balance snapshot per material, taken ONCE up front — every daily quantity below is a
+  // FIXED fraction of that one snapshot, never re-read mid-generation. An earlier version sized
+  // each category (consumption/receipt/dispatch) off whatever the LIVE balance happened to be at
+  // that point in the script, across three separate sequential passes — since each pass's postings
+  // changed the real balance the NEXT pass would read, the effect compounded across ~30 daily
+  // postings into near-zero/negative stock. Sizing everything off one snapshot up front is
+  // mathematically safe regardless of window length or how many categories are enabled: the total
+  // possible drawdown is bounded by (consumePct + dispatchPct) of that one snapshot, which stays
+  // comfortably under 100% by construction, and receivePct alone determines the eventual trend.
+  async function dailyMovementHistory(materialId: string, locationId: string, uom: string, opts: {
+    days?: number;
+    consumePct?: number; processName?: string;
+    receivePct?: number;
+    dispatchPct?: number;
+  }) {
+    const days = opts.days ?? 27; // safely inside every material's ~30-day OPENING_BALANCE-to-now window
     const balance = await prisma.inventoryBalance.findUnique({ where: { materialId_locationId: { materialId, locationId } } });
-    const current = balance?.quantity ?? 0;
-    const dailyQty = current * dailyRatePct;
-    if (dailyQty < 0.5) return; // not enough stock here for a meaningful daily draw-down
-    for (let i = days; i >= 0; i--) {
-      const jitter = 0.75 + Math.random() * 0.5; // day-to-day variability so trend charts aren't a flat line
-      const quantity = Math.max(0.1, Math.round(dailyQty * jitter * 10) / 10);
-      const timestamp = new Date(Date.now() - i * 86400000);
-      await postMovement({ materialId, transactionType: "CONSUMPTION", quantity, uom, locationId, processName, reference: `Shift log ${timestamp.toISOString().slice(0, 10)}`, timestamp });
-    }
-  }
-  // Alternative Fuel is deliberately left out — it's already seeded critically low, and drawing it
-  // down further would just be redundant with that intentional scenario.
-  await consumptionHistory(limestone.id, limestoneStockpileA.id, "MT", "Raw Mill");
-  await consumptionHistory(coal.id, coalYard.id, "MT", "Kiln Firing");
-  await consumptionHistory(gypsum.id, gypsumStore.id, "MT", "Cement Mill 1");
-  await consumptionHistory(clinker.id, clinkerStore.id, "MT", "Cement Mill 1");
-  await consumptionHistory(flyAsh.id, maintenanceStore.id, "MT", "Cement Mill 1");
-  await consumptionHistory(slag.id, maintenanceStore.id, "MT", "Cement Mill 1");
-  await consumptionHistory(ironCorrective.id, maintenanceStore.id, "MT", "Kiln Feed Correction");
-  await consumptionHistory(sand.id, maintenanceStore.id, "MT", "Civil Works");
-  await consumptionHistory(cementGp.id, cementSilo1.id, "MT", "Packing Area");
-  await consumptionHistory(cementGb.id, cementSilo2.id, "MT", "Packing Area");
-  await consumptionHistory(cementHe.id, cementSilo3.id, "MT", "Packing Area");
-  await consumptionHistory(cementBag.id, packingArea.id, "Nos", "Dispatch Loading", { dailyRatePct: 0.025 });
+    const snapshot = balance?.quantity ?? 0;
+    if (snapshot < 1) return; // nothing meaningful to move here
 
-  console.log("Building periodic receipt (GRN) and dispatch history alongside it — so the dashboard's Inventory Movement chart shows Received/Dispatched bars, not just Consumed...");
-  // Periodic inbound deliveries (a truckload every few days, not a daily trickle) for raw
-  // materials — mirrors consumptionHistory's "size off current balance" approach so it stays
-  // proportionate to whatever quantity each material already carries.
-  async function receiptHistory(materialId: string, locationId: string, uom: string, opts: { days?: number; intervalDays?: number; batchPct?: number } = {}) {
-    const days = opts.days ?? 32;
-    // Daily (not every-few-days) so the chart shows a genuine up-then-down "heartbeat" every
-    // single day rather than long flat stretches broken up by occasional large jumps.
-    const intervalDays = opts.intervalDays ?? 1;
-    const batchPct = opts.batchPct ?? 0.06;
-    const balance = await prisma.inventoryBalance.findUnique({ where: { materialId_locationId: { materialId, locationId } } });
-    const current = balance?.quantity ?? 0;
-    const batchQty = current * batchPct;
-    if (batchQty < 0.5) return;
-    for (let i = days; i >= 0; i -= intervalDays) {
-      const jitter = 0.8 + Math.random() * 0.4;
-      const quantity = Math.max(0.1, Math.round(batchQty * jitter * 10) / 10);
+    const dailyConsume = opts.consumePct ? Math.max(0.1, (snapshot * opts.consumePct) / days) : 0;
+    const dailyReceive = opts.receivePct ? Math.max(0.1, (snapshot * opts.receivePct) / days) : 0;
+    const dailyDispatch = opts.dispatchPct ? Math.max(0.1, (snapshot * opts.dispatchPct) / days) : 0;
+
+    for (let i = days; i >= 0; i--) {
       const timestamp = new Date(Date.now() - i * 86400000);
-      await postMovement({ materialId, transactionType: "RECEIPT", quantity, uom, locationId, reference: `GRN-${timestamp.toISOString().slice(0, 10)}`, timestamp });
+      const dayKey = timestamp.toISOString().slice(0, 10);
+      if (dailyReceive > 0) {
+        const quantity = Math.round(dailyReceive * (0.8 + Math.random() * 0.4) * 10) / 10;
+        await postMovement({ materialId, transactionType: "RECEIPT", quantity, uom, locationId, reference: `GRN-${dayKey}`, timestamp });
+      }
+      if (dailyConsume > 0) {
+        const quantity = Math.round(dailyConsume * (0.75 + Math.random() * 0.5) * 10) / 10;
+        await postMovement({ materialId, transactionType: "CONSUMPTION", quantity, uom, locationId, processName: opts.processName, reference: `Shift log ${dayKey}`, timestamp: new Date(timestamp.getTime() + 3600000) });
+      }
+      if (dailyDispatch > 0) {
+        const quantity = Math.round(dailyDispatch * (0.8 + Math.random() * 0.4) * 10) / 10;
+        await postMovement({ materialId, transactionType: "DISPATCH", quantity, uom, locationId, reference: `Dispatch log ${dayKey}`, timestamp: new Date(timestamp.getTime() + 7200000) });
+      }
     }
   }
-  // Periodic outbound truckloads — to customers for finished cement products, and to sister
-  // units/other cement plants for surplus raw materials and byproducts (clinker, fly ash and
-  // slag inter-plant trading is standard practice in the industry).
-  async function dispatchHistory(materialId: string, locationId: string, uom: string, opts: { days?: number; intervalDays?: number; batchPct?: number } = {}) {
-    const days = opts.days ?? 32;
-    const intervalDays = opts.intervalDays ?? 1;
-    const batchPct = opts.batchPct ?? 0.05;
-    const balance = await prisma.inventoryBalance.findUnique({ where: { materialId_locationId: { materialId, locationId } } });
-    const current = balance?.quantity ?? 0;
-    const batchQty = current * batchPct;
-    if (batchQty < 0.5) return;
-    for (let i = days; i >= 0; i -= intervalDays) {
-      const jitter = 0.8 + Math.random() * 0.4;
-      const quantity = Math.max(0.1, Math.round(batchQty * jitter * 10) / 10);
-      const timestamp = new Date(Date.now() - i * 86400000);
-      await postMovement({ materialId, transactionType: "DISPATCH", quantity, uom, locationId, reference: `Dispatch log ${timestamp.toISOString().slice(0, 10)}`, timestamp });
+  // Raw materials/fuel/additives/intermediates: Received + Consumed only — never dispatched to a
+  // customer, that's exclusively for finished/packaged goods below. Alternative Fuel is kept
+  // oscillating low (small pcts) so its intentional "critically low stock" demo scenario survives.
+  await dailyMovementHistory(limestone.id, limestoneStockpileA.id, "MT", { consumePct: 0.22, receivePct: 0.25, processName: "Raw Mill" });
+  await dailyMovementHistory(coal.id, coalYard.id, "MT", { consumePct: 0.22, receivePct: 0.25, processName: "Kiln Firing" });
+  await dailyMovementHistory(gypsum.id, gypsumStore.id, "MT", { consumePct: 0.22, receivePct: 0.25, processName: "Cement Mill 1" });
+  await dailyMovementHistory(clinker.id, clinkerStore.id, "MT", { consumePct: 0.22, receivePct: 0.25, processName: "Cement Mill 1" });
+  await dailyMovementHistory(flyAsh.id, maintenanceStore.id, "MT", { consumePct: 0.22, receivePct: 0.25, processName: "Cement Mill 1" });
+  await dailyMovementHistory(slag.id, maintenanceStore.id, "MT", { consumePct: 0.22, receivePct: 0.25, processName: "Cement Mill 1" });
+  await dailyMovementHistory(ironCorrective.id, maintenanceStore.id, "MT", { consumePct: 0.22, receivePct: 0.25, processName: "Kiln Feed Correction" });
+  await dailyMovementHistory(sand.id, maintenanceStore.id, "MT", { consumePct: 0.22, receivePct: 0.25, processName: "Civil Works" });
+  await dailyMovementHistory(altFuel.id, altFuelBunker.id, "MT", { consumePct: 0.35, receivePct: 0.38, processName: "Kiln Firing" });
+  // Finished/packaged goods: Received (production inflow) + Consumed (packing draw) + Dispatched
+  // (sold to a customer) — the only materials in the catalog that legitimately dispatch.
+  await dailyMovementHistory(cementGp.id, cementSilo1.id, "MT", { consumePct: 0.25, receivePct: 0.40, dispatchPct: 0.20, processName: "Packing Area" });
+  await dailyMovementHistory(cementGb.id, cementSilo2.id, "MT", { consumePct: 0.25, receivePct: 0.40, dispatchPct: 0.20, processName: "Packing Area" });
+  await dailyMovementHistory(cementHe.id, cementSilo3.id, "MT", { consumePct: 0.25, receivePct: 0.40, dispatchPct: 0.20, processName: "Packing Area" });
+  await dailyMovementHistory(cementBag.id, packingArea.id, "Nos", { consumePct: 0.22, receivePct: 0.40, dispatchPct: 0.13, processName: "Dispatch Loading" });
+
+  console.log("Seeding Issue-purpose Stock Requests for production material draw — real requests through the actual lifecycle, backdated across the history window, so Consumption is traceable from the Requests page too...");
+  const issueDefs: { materialId: string; locationId: string; issuedTo: string; equipmentRef: string; quantities: number[] }[] = [
+    { materialId: limestone.id, locationId: limestoneStockpileA.id, issuedTo: "Raw Mill Feed Crew", equipmentRef: "Raw Mill", quantities: [350, 420, 380] },
+    { materialId: coal.id, locationId: coalYard.id, issuedTo: "Kiln Firing Team", equipmentRef: "Kiln", quantities: [55, 65, 50] },
+    { materialId: gypsum.id, locationId: gypsumStore.id, issuedTo: "Cement Mill 1 Production", equipmentRef: "Cement Mill 1", quantities: [45, 50, 40] },
+    { materialId: clinker.id, locationId: clinkerStore.id, issuedTo: "Cement Mill 1 Production", equipmentRef: "Cement Mill 1", quantities: [90, 110, 95] },
+    { materialId: flyAsh.id, locationId: maintenanceStore.id, issuedTo: "Cement Mill 1 Production", equipmentRef: "Cement Mill 1", quantities: [5, 6, 5] },
+    { materialId: slag.id, locationId: maintenanceStore.id, issuedTo: "Cement Mill 1 Production", equipmentRef: "Cement Mill 1", quantities: [5, 6, 5] },
+    { materialId: ironCorrective.id, locationId: maintenanceStore.id, issuedTo: "Kiln Feed Correction Team", equipmentRef: "Kiln", quantities: [5, 6, 5] },
+    { materialId: sand.id, locationId: maintenanceStore.id, issuedTo: "Civil Works Team", equipmentRef: "", quantities: [5, 6, 5] },
+    { materialId: altFuel.id, locationId: altFuelBunker.id, issuedTo: "Kiln Firing Team (Alt Fuel)", equipmentRef: "Kiln", quantities: [1.5, 2, 1.5] },
+  ];
+  const issueDaysAgo = [24, 14, 5]; // spread across the ~27-day history window, safely after the OPENING_BALANCE date
+  const issueRequesters = [rahul, priya];
+  let issueCount = 0;
+  for (const def of issueDefs) {
+    for (let i = 0; i < issueDaysAgo.length; i++) {
+      const requester = issueRequesters[issueCount % issueRequesters.length];
+      const historicalDate = new Date(Date.now() - issueDaysAgo[i] * 86400000);
+      historicalDate.setHours(8, 0, 0, 0);
+      const issueRequest = await createStockRequest({
+        materialId: def.materialId, quantityRequested: def.quantities[i], requiredByDate: historicalDate,
+        fromLocationId: def.locationId, purpose: "ISSUE", issuedTo: def.issuedTo,
+        reason: "Scheduled production material draw", requestedByUserId: requester.id,
+        requestType: "MATERIAL", equipmentRef: def.equipmentRef || undefined,
+      });
+      await acceptStockRequest(issueRequest.id, neha.id);
+      await routeToSupervisor(issueRequest.id, amit.id, neha.id);
+      await assignOperator(issueRequest.id, suresh.id, amit.id);
+      await startDelivery(issueRequest.id, suresh.id);
+      await markDelivered(issueRequest.id, suresh.id, `Delivered to ${def.issuedTo}`);
+      await confirmReceipt(issueRequest.id, def.quantities[i], requester.id);
+      await backdateLifecycle(issueRequest.id, historicalDate.toISOString(), 6);
+      issueCount++;
     }
   }
-  await receiptHistory(limestone.id, limestoneStockpileA.id, "MT");
-  await receiptHistory(coal.id, coalYard.id, "MT");
-  await receiptHistory(gypsum.id, gypsumStore.id, "MT");
-  await receiptHistory(clinker.id, clinkerStore.id, "MT");
-  await receiptHistory(flyAsh.id, maintenanceStore.id, "MT");
-  await receiptHistory(slag.id, maintenanceStore.id, "MT");
-  await receiptHistory(ironCorrective.id, maintenanceStore.id, "MT");
-  await receiptHistory(sand.id, maintenanceStore.id, "MT");
-  await dispatchHistory(cementGp.id, cementSilo1.id, "MT");
-  await dispatchHistory(cementGb.id, cementSilo2.id, "MT");
-  await dispatchHistory(cementHe.id, cementSilo3.id, "MT");
-  await dispatchHistory(cementBag.id, packingArea.id, "Nos", { batchPct: 0.03 });
-  await dispatchHistory(limestone.id, limestoneStockpileA.id, "MT", { batchPct: 0.025 });
-  await dispatchHistory(coal.id, coalYard.id, "MT", { batchPct: 0.025 });
-  await dispatchHistory(gypsum.id, gypsumStore.id, "MT", { batchPct: 0.025 });
-  await dispatchHistory(clinker.id, clinkerStore.id, "MT", { batchPct: 0.025 });
-  await dispatchHistory(flyAsh.id, maintenanceStore.id, "MT", { batchPct: 0.025 });
-  await dispatchHistory(slag.id, maintenanceStore.id, "MT", { batchPct: 0.025 });
-  await dispatchHistory(ironCorrective.id, maintenanceStore.id, "MT", { batchPct: 0.025 });
-  await dispatchHistory(sand.id, maintenanceStore.id, "MT", { batchPct: 0.025 });
 
   console.log("Seeding default Notification Rules — spec section 6's examples plus coverage of the remaining trigger library...");
   async function rule(event: keyof typeof NOTIFICATION_EVENT_META, recipient: { recipientType: "ROLE" | "RELEVANT_USER"; recipientRole?: string }, channel: "IN_APP" | "EMAIL" | "BOTH") {
